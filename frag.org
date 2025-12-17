@@ -1,0 +1,1413 @@
+* Cell-free DNA Fragmentomics Analysis                              :biopipe:
+** [[id:339b69f6-6c09-4e9d-a2ec-27bdf5747163][README]]
+** Repository setup and administration
+*** Get in-repo test data
+- Get 60k reads per sample from SRA
+  #+begin_src bash
+conda activate biotools
+cd /tmp
+acc="SRR3819939"
+nreads=60000
+
+fastq-dump --split-files --gzip -X "$nreads" "$acc"
+
+echo "R1 reads: $(zcat "/tmp/${acc}_1.fastq.gz" | wc -l | awk '{print $1/4}')"
+echo "R2 reads: $(zcat "/tmp/${acc}_2.fastq.gz" | wc -l | awk '{print $1/4}')"
+
+
+# wget stream → zcat → head → gzip (silence SIGPIPE noise)
+fetch_head() {
+  ( set +o pipefail
+    wget -qO- "$1" | zcat 2>/dev/null | head -n "$2" | gzip > "$3"
+  ) || true
+}
+
+REF_URL="https://hgdownload.soe.ucsc.edu/goldenPath/hg38/chromosomes/chr22.fa.gz"
+FA_HEAD_LINES=4000000
+OUT_FA="/tmp/chr22.test.fa.gz"
+
+fetch_head "${REF_URL}" "${FA_HEAD_LINES}" "${OUT_FA}"
+##########1##########2##########3##########4##########5##########6##########7##########8
+
+
+
+OUT_DIR="/tmp/test_inputs"
+mkdir -p "$OUT_DIR"
+
+# 1) fetch chr22 subset
+fetch_head() {
+  ( set +o pipefail
+    wget -qO- "$1" | zcat 2>/dev/null | head -n "$2" | gzip > "$3"
+  ) || true
+}
+
+REF_URL="https://hgdownload.soe.ucsc.edu/goldenPath/hg38/chromosomes/chr22.fa.gz"
+FA_HEAD_LINES=4000000
+OUT_FA="${OUT_DIR}/chr22.test.fa.gz"
+
+echo "[ref] chr22 subset → ${OUT_FA}"
+fetch_head "${REF_URL}" "${FA_HEAD_LINES}" "${OUT_FA}"
+test -s "${OUT_FA}"
+
+# 2) fetch blacklist
+OUT_BLK="${OUT_DIR}/hg38-blacklist.v2.bed.gz"
+BLK_URL="https://raw.githubusercontent.com/Boyle-Lab/Blacklist/master/lists/hg38-blacklist.v2.bed.gz"
+
+echo "[ref] hg38 blacklist → ${OUT_BLK}"
+wget -qO "${OUT_BLK}" "${BLK_URL}"
+test -s "${OUT_BLK}"
+
+# 3) build keep/exclude
+KEEP_BED="${OUT_DIR}/chr22.keep.bed"
+EXCL_BED="${OUT_DIR}/chr22.exclude.blacklist.bed.gz"
+
+echo "[beds] building keep/exclude from ${OUT_FA}"
+FA_UNGZ="${OUT_DIR}/chr22.test.fa"
+zcat "${OUT_FA}" > "${FA_UNGZ}"
+test -s "${FA_UNGZ}"
+
+samtools faidx "${FA_UNGZ}"
+test -s "${FA_UNGZ}.fai"
+
+awk 'BEGIN{OFS="\t"} {print $1,0,$2}' "${FA_UNGZ}.fai" \
+  | sort -k1,1 -k2,2n > "${KEEP_BED}"
+test -s "${KEEP_BED}"
+
+awk 'NR==FNR{ok[$1]=1; next} ok[$1]' <(cut -f1 "${FA_UNGZ}.fai") <(zcat "${OUT_BLK}") \
+  | sort -k1,1 -k2,2n | bgzip -c > "${EXCL_BED}"
+test -s "${EXCL_BED}"
+
+tabix -p bed "${EXCL_BED}" || true
+
+echo "[beds] keep=${KEEP_BED}  exclude=${EXCL_BED}"
+
+
+# --- ensure .gitignore rules: ignore tests/full/* but NOT tests/full/inputs/** ---
+ensure_gitignore() {
+  local gi="${REPO_DIR}/.gitignore"
+  local req1='tests/full/*'
+  local req2='!tests/full/inputs/'
+  local req3='!tests/full/inputs/**'
+  touch "$gi"
+  local have1=0 have2=0 have3=0
+  grep -Fxq "$req1" "$gi" && have1=1 || true
+  grep -Fxq "$req2" "$gi" && have2=1 || true
+  grep -Fxq "$req3" "$gi" && have3=1 || true
+  if (( ! have1 || ! have2 || ! have3 )); then
+    {
+      echo ''
+      echo '# --- test data (auto-managed by setup_test_data.sh) ---'
+      (( have1 )) || echo "$req1"
+      (( have2 )) || echo "$req2"
+      (( have3 )) || echo "$req3"
+    } >> "$gi"
+    echo "[gitignore] ensured patterns for tests/full with inputs preserved"
+  fi
+}
+#+end_src
+- Get small hg38 reference by taking top of chr22
+- Get broad blacklist regions and apply to our reference as bed files
+- Ensure gitignore does not push tests/full, but does retain tests/full/inputs/*
+#+begin_src bash :tangle ./tools/get_test_data.sh
+#!/usr/bin/env bash
+set -euo pipefail
+
+# -----------------------------------------------------------------------------
+# Script to collect and pre-process input data for a minimal working example
+# of the repo functionality. The input data will persist in the repo. This
+# script just documents how they were obtained. The other contents of
+# tests/full are NOT committed and are ignored by git.
+# -----------------------------------------------------------------------------
+
+parse_args() {
+    declare -g script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    declare -g repo_dir="$(cd "${script_dir}/.." && pwd)"
+    declare -g out_dir="${repo_dir}/tests/full/inputs"
+
+    declare -g blk_url="https://raw.githubusercontent.com/Boyle-Lab/Blacklist/master/lists/hg38-blacklist.v2.bed.gz"
+    declare -g ref_url="https://hgdownload.soe.ucsc.edu/goldenPath/hg38/chromosomes/chr22.fa.gz"
+
+
+    declare -g fa_head_lines=4000000
+    declare -g nreads=60000
+
+    declare -g keep_bed="${out_dir}/chr22.keep.bed"
+    declare -g out_blk="${out_dir}/hg38-blacklist.v2.bed.gz"
+    declare -g out_fa="${out_dir}/chr22-test.fa.gz"
+    declare -g excl_bed="${out_dir}/chr22.exclude.blacklist.bed.gz"
+
+    declare -g RUNS=( SRR3819940 SRR3819939 SRR3819938 SRR3819937 )
+
+}
+
+main(){
+    parse_args "$@"
+    clean_inputs_dir
+    ensure_gitignore
+    for acc in "${RUNS[@]}"; do
+	fetch_cfdna_reads
+    done
+    fetch_chr22_ref_subset
+    fetch_blacklist
+    make_exclude_keep_beds
+}
+
+clean_inputs_dir() {
+  if [[ -d "$out_dir" ]]; then
+    echo "[clean] removing ${out_dir}"
+    rm -rf "$out_dir"
+  fi
+  mkdir -p "$out_dir"
+}
+
+ensure_gitignore() {
+  gi="${repo_dir}/.gitignore"
+
+  req1='tests/full/*'
+  req2='!tests/full/inputs/'
+  req3='!tests/full/inputs/**'
+
+  touch "$gi"
+
+  have1=0; have2=0; have3=0
+  grep -Fxq "$req1" "$gi" && have1=1 || true
+  grep -Fxq "$req2" "$gi" && have2=1 || true
+  grep -Fxq "$req3" "$gi" && have3=1 || true
+
+  if (( ! have1 || ! have2 || ! have3 )); then
+    {
+      echo ''
+      echo '# --- test data (auto-managed by get_test_data.sh) ---'
+      (( have1 )) || echo "$req1"
+      (( have2 )) || echo "$req2"
+      (( have3 )) || echo "$req3"
+    } >> "$gi"
+    echo "[gitignore] ensured tests/full ignores with inputs preserved"
+  fi
+}
+
+fetch_cfdna_reads() {
+  mkdir -p "$out_dir"
+
+  ( cd "$out_dir" && fastq-dump --split-files --gzip -X "$nreads" "$acc" )
+
+  echo "R1 reads: $(zcat "${out_dir}/${acc}_1.fastq.gz" | wc -l | awk '{print $1/4}')"
+  echo "R2 reads: $(zcat "${out_dir}/${acc}_2.fastq.gz" | wc -l | awk '{print $1/4}')"
+}
+
+fetch_chr22_ref_subset() {
+  mkdir -p "$out_dir"
+
+  echo "[ref] chr22 subset → ${out_fa}"
+  ( set +o pipefail
+    wget -qO- "$ref_url" | zcat 2>/dev/null | head -n "$fa_head_lines" | gzip > "$out_fa"
+  ) || true
+
+  test -s "$out_fa"
+}
+
+fetch_blacklist() {
+  mkdir -p "$out_dir"
+
+  echo "[ref] hg38 blacklist → ${out_blk}"
+  wget -qO "$out_blk" "$blk_url"
+  [[ -s "$out_blk" ]] || { echo "ERR: failed to write ${out_blk}" >&2; exit 1; }
+}
+
+make_exclude_keep_beds() {
+  mkdir -p "$out_dir"
+
+  echo "[beds] building keep/exclude from ${out_fa}"
+
+  fa_ungz="${out_dir}/chr22.test.fa"
+  zcat "$out_fa" > "$fa_ungz"
+  test -s "$fa_ungz"
+
+  samtools faidx "$fa_ungz"
+  test -s "${fa_ungz}.fai"
+
+  # KEEP: spans for all contigs present in the .fai (chr22-only here)
+  awk 'BEGIN{OFS="\t"} {print $1,0,$2}' "${fa_ungz}.fai" \
+    | sort -k1,1 -k2,2n > "$keep_bed"
+  test -s "$keep_bed"
+
+  # EXCLUDE: clip blacklist to contigs present in .fai and bgzip
+  awk 'NR==FNR{ok[$1]=1; next} ok[$1]' <(cut -f1 "${fa_ungz}.fai") <(zcat "$out_blk") \
+    | sort -k1,1 -k2,2n | bgzip -c > "$excl_bed"
+  test -s "$excl_bed"
+
+  tabix -p bed "$excl_bed" || true
+
+  rm -f "$fa_ungz" "${fa_ungz}.fai"
+
+  echo "[beds] keep=${keep_bed}  exclude=${excl_bed}"
+}
+
+main "$@"
+
+#+end_src
+
+*** Org update
+*** README
+:PROPERTIES:
+:ID:       339b69f6-6c09-4e9d-a2ec-27bdf5747163
+:END:
+*** TODO Integration testing setup
+#+begin_src bash
+wget https://hgdownload.cse.ucsc.edu/goldenpath/hg38/chromosomes/chr19.fa.gz --directory-prefix=test/inputs
+#+end_src
+- Get test data
+  #+begin_src bash
+singularity shell --bind /mnt ~/sing_containers/cfdna_wgs.1.0.0.sif
+mkdir -p test/inputs
+sambamba view -s 0.01 -f bam -t 4 /mnt/ris/aadel/mpnst/bam/cfdna_wgs/ds/lib105_ds10.bam > test/bam/lib001.bam
+sambamba view -s 0.01 -f bam -t 4 /mnt/ris/aadel/mpnst/bam/cfdna_wgs/ds/lib205_ds10.bam > test/bam/lib002.bam
+
+#+end_src
+- Make GC bedfile
+  #+begin_src bash
+#+end_src
+  #+begin_src R
+library(tidyverse)
+
+read_tsv("resources/gc5mb.tsv") %>%
+  rename(chr = 1,
+         start = 2,
+         end = 3,
+         gc = 4) %>%
+  filter(!grepl("_", chr)) %>%
+  filter(gc > 30) %>%
+  select(chr, start, end) %>%
+  write_tsv(., "resources/gc.bed", col_names = FALSE)
+
+#+end_src
+- Make keep.bed from gc and blacklist bedfiles
+  #+begin_src bash
+singularity shell --bind /mnt ~/sing_containers/cfdna_wgs.1.0.0.sif
+
+bedtools subtract -a resources/gc.bed \
+         -b resources/hg38-blacklist.v2.bed > resources/keep.bed
+
+cp resources/keep.bed test/inputs/
+
+bedtools subtract -a resources/gc.bed \
+         -b resources/hg38-blacklist.v2.bed |
+    bedtools sort -i stdin | bedtools merge -i stdin > resources/keep.bed
+#+end_src
+- [[file:resources/][Resources]]
+*** [[file:config/int_test.yaml][Snakemake configuration YAMLs]]
+#+begin_src bash :tangle config/int_test.yaml
+container:
+  cfdna_wgs: "${HOME}/sing_containers/cfdna_wgs.1.0.0.sif"
+
+dir:
+  data:
+    cfdna_wgs: "test"
+  repo:
+    cfdna_wgs: "/home/jeszyman/repos/cfdna-frag"
+  scripts:
+    cfdna_wgs: "workflow/scripts"
+
+files:
+  cfdna_wgs_frag_keep_bed: "test/inputs/keep.bed"
+  cfdna_wgs_genome_fasta: "/mnt/ris/aadel/mpnst/inputs/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna"
+
+threads:
+  cfdna_wgs: 4
+#+end_src
+
+** INPROCESS Make fragment bed files                                    :smk:
+:PROPERTIES:
+:header-args:snakemake: :tangle ./workflow/frag_bed.smk
+:END:
+*** DONE Filter alignments                                         :smk_rule:
+- Snakemake
+  #+begin_src snakemake
+rule filter_alignments:
+    input:
+        bam = cfdna_wgs_frag_bam_inputs + "/{library}.bam",
+        keep_bed = config["files"]["cfdna_wgs_frag_keep_bed"],
+    params:
+        script = config["dir"]["scripts"]["cfdna_wgs"] + "/filter_alignments.sh",
+        temp_dir = config["dir"]["data"]["cfdna_wgs"] + "/tmp",
+        threads = config["threads"]["cfdna_wgs"],
+    resources:
+        mem_mb=5000
+    output:
+        cfdna_wgs_frag_filt_bams + "/{library}_filt.bam",
+    container:
+        config["container"]["cfdna_wgs"],
+    shell:
+        """
+        {params.script} \
+        {input.bam} \
+        {input.keep_bed} \
+        {params.temp_dir} \
+        {params.threads} \
+        {output}
+        """
+#+end_src
+- [[file:./workflow/scripts/filter_alignments.sh][Base script]]
+  #+begin_src bash :tangle ./workflow/scripts/filter_alignments.sh
+# Function
+filter_bams(){
+    # Filter to mapq 30 and limit to keep.bed genomic regions
+    samtools view -@ $1 -b -h -L $2 -o - -q 30 $3 |
+    samtools sort -@ $1 -n -o - -T $5 - |
+    samtools fixmate -@ $1 - - |
+    samtools sort -@ $1 -n -o $4 -T $5 -
+    }
+
+# Snakemake variables
+input_in_bam="$1"
+input_keep_bed="$2"
+params_temp_dir="$3"
+params_threads="$4"
+output_filt_bam="$5"
+
+# Run command
+filter_bams "$params_threads" "$input_keep_bed" "$input_in_bam" "$output_filt_bam" $params_temp_dir
+#+end_src
+*** DONE Read to frag bed                                          :smk_rule:
+- Snakemake
+  #+begin_src snakemake
+rule read_to_frag_bed:
+    input:
+        cfdna_wgs_frag_filt_bams + "/{library_id}_filt.bam",
+    params:
+        fasta = config["dir"]["data"]["cfdna_wgs"] + "/inputs/chr19.fa",
+        script = config["dir"]["scripts"]["cfdna_wgs"] + "/read_to_frag_bed.sh",
+    output:
+        cfdna_wgs_frag_beds + "/{library_id}_frag.bed",
+    resources:
+        mem_mb=5000
+    container:
+        config["container"]["cfdna_wgs"]
+    shell:
+        """
+        {params.script} \
+	{input} \
+        {params.fasta} \
+        {output}
+        """
+#+end_src
+- [[file:./workflow/scripts/read_to_frag_bed.sh][Base script]]
+  #+begin_src bash :tangle ./workflow/scripts/read_to_frag_bed.sh
+#########1#########2#########3#########4#########5#########6#########7#########8
+
+# Snakemake variables
+input_bam="$1"
+params_fasta="$2"
+output_frag_bed="$3"
+
+# Function
+bam_to_frag(){
+    # Make bedpe
+    bedtools bamtobed -bedpe -i $1 |
+        # Filter any potential non-standard alignments
+        awk '$1==$4 {print $0}' | awk '$2 < $6 {print $0}' |
+        # Create full-fragment bed file
+        awk -v OFS='\t' '{print $1,$2,$6}' |
+        # Annotate with GC content and fragment length
+        bedtools nuc -fi $2 -bed stdin |
+        # Convert back to standard bed with additional columns
+        awk -v OFS='\t' '{print $1,$2,$3,$5,$12}' |
+        sed '1d' > $3
+    }
+
+# Run command
+bam_to_frag $input_bam \
+            $params_fasta \
+            $output_frag_bed
+#+end_src
+*** DONE Make GC Distros                                           :smk_rule:
+- Snakemake
+  #+begin_src snakemake
+# For each library, makes a csv with columns of library_id, gc_strata, and fract_frags
+rule gc_distro:
+    container:
+        config["container"]["cfdna_wgs"],
+    input:
+        cfdna_wgs_frag_beds + "/{library_id}_frag.bed",
+    log:
+        cfdna_wgs_logs + "/{library_id}_gc_distro.log",
+    output:
+        cfdna_wgs_distros + "/{library_id}_gc_distro.csv"
+    params:
+        script = config["dir"]["scripts"]["cfdna_wgs"] + "/gc_distro.R",
+    shell:
+        """
+        Rscript {params.script} \
+        {input} \
+        {output} \
+        > {log} 2>&1
+        """
+#+end_src
+- [[file:workflow/scripts/gc_distro.R][Base script]]
+  #+begin_src R :tangle ./workflow/scripts/gc_distro.R
+args = commandArgs(trailingOnly = TRUE)
+bed_file = args[1]
+distro_file = args[2]
+
+library(tidyverse)
+
+# Read in modified bed
+bed = read.table(bed_file, sep = '\t')
+names(bed) = c("chr","start","end","gc_raw","len")
+
+# Generate distribution csv
+distro =
+  bed %>%
+  # Round GC
+  mutate(gc_strata = round(gc_raw, 2)) %>%
+  # Count frags per strata
+  count(gc_strata) %>%
+  # Get fraction frags
+  mutate(fract_frags = n/sum(n)) %>% mutate(library_id = gsub("_frag.bed", "", gsub("^.*lib", "lib", bed_file))) %>%
+  select(library_id,gc_strata,fract_frags) %>%
+  write.csv(file = distro_file, row.names = F)
+#+end_src
+
+*** DONE Make healthy GC summary                                   :smk_rule:
+- Snakemake
+  #+begin_src snakemake
+# Make tibble of gc_strata and median fraction of fragments from healthy samples
+rule make_healthy_gc_summary:
+    container:
+        config["container"]["cfdna_wgs"],
+    input:
+        expand(cfdna_wgs_distros + "/{library_id}_gc_distro.csv", library_id = LIBRARIES),
+    log:
+        cfdna_wgs_logs + "/make_healthy_gc_summary.log",
+    output:
+        cfdna_wgs_distros + "/healthy_med.rds"
+    params:
+        distro_dir = cfdna_wgs_distros,
+        healthy_libs_str = LIBRARIES_HEALTHY,
+        script = config["dir"]["scripts"]["cfdna_wgs"] + "/make_healthy_gc_summary.R",
+    shell:
+        """
+        Rscript {params.script} \
+        {params.distro_dir} \
+        "{params.healthy_libs_str}" \
+        {output} \
+        > {log} 2>&1
+        """
+#+end_src
+- [[file:workflow/scripts/make_healthy_gc_summary.R][Base script]]
+  #+begin_src R :tangle ./workflow/scripts/make_healthy_gc_summary.R
+args = commandArgs(trailingOnly = TRUE)
+distro_dir = args[1]
+healthy_libs_str = args[2]
+healthy_med_file = args[3]
+
+library(tidyverse)
+
+healthy_libs_distros = paste0(distro_dir, "/", unlist(strsplit(healthy_libs_str, " ")), "_gc_distro.csv")
+
+read_in_gc = function(gc_csv){
+  read.csv(gc_csv, header = T)
+}
+
+healthy_list = lapply(healthy_libs_distros, read_in_gc)
+
+# Bind
+healthy_all = do.call(rbind, healthy_list)
+
+# Summarize
+healthy_med =
+  healthy_all %>%
+  group_by(gc_strata) %>%
+  summarise(med_frag_fract = median(fract_frags))
+
+# Save
+saveRDS(healthy_med, file = healthy_med_file)
+#+end_src
+*** DONE Sample frags by gc                                        :smk_rule:
+- Snakemake
+  #+begin_src snakemake
+rule sample_frags_by_gc:
+    container:
+        config["container"]["cfdna_wgs"],
+    input:
+        healthy_med = cfdna_wgs_distros + "/healthy_med.rds",
+        frag_bed = cfdna_wgs_frag_beds + "/{library_id}_frag.bed",
+    log:
+        cfdna_wgs_logs + "/{library_id}_sample_frags_by_gc.log",
+    output:
+        cfdna_wgs_frag_beds + "/{library_id}_frag_sampled.bed",
+    params:
+        script = config["dir"]["scripts"]["cfdna_wgs"] + "/sample_frags_by_gc.R",
+    shell:
+        """
+        Rscript {params.script} \
+        {input.healthy_med} \
+        {input.frag_bed} \
+        {output} > {log} 2>&1
+        """
+#+end_src
+- [[file:./workflow/scripts/sample_frags_by_gc.R][Base script]]
+  #+begin_src R :noweb yes :tangle ./workflow/scripts/sample_frags_by_gc.R
+args = commandArgs(trailingOnly = TRUE)
+healthy_med = args[1]
+frag_file = args[2]
+sampled_file = args[3]
+
+library(tidyverse)
+
+healthy_fract = readRDS(healthy_med)
+frag_file = read.table(frag_file, sep = '\t', header = F)
+
+frag_bed = frag_file
+names(frag_bed) = c("chr", "start", "end", "gc_raw", "len")
+
+frag = frag_bed %>%
+  # Round off the GC strata
+  mutate(gc_strata = round(gc_raw, 2)) %>%
+  # Join the median count of fragments per strata in healthies
+  # Use this later as sampling weight
+  left_join(healthy_fract, by = "gc_strata")
+
+# Determine frags to sample by counts in strata for which healthies had highest count
+stratatotake = frag$gc_strata[which.max(frag$med_frag_fract)]
+fragsinmaxstrata = length(which(frag$gc_strata == stratatotake))
+fragstotake = round(fragsinmaxstrata/stratatotake)
+
+sampled = frag %>%
+  filter(!is.na(med_frag_fract)) %>%
+  slice_sample(., n = nrow(.), weight_by = med_frag_fract, replace = T) %>% select(chr, start, end, len, gc_strata)
+
+write.table(sampled, sep = "\t", col.names = F, row.names = F, quote = F, file = sampled_file)
+
+#+end_src
+*** DONE Frag window sum:smk_rule:
+- Snakemake
+  #+begin_src snakemake
+rule frag_window_sum:
+    container:
+        config["container"]["cfdna_wgs"],
+    input:
+        cfdna_wgs_frag_beds + "/{library_id}_frag_sampled.bed",
+    log:
+        cfdna_wgs_logs + "/{library_id}_frag_window_sum.log",
+    output:
+        short = cfdna_wgs_frag_len + "/{library_id}_norm_short.bed",
+        long = cfdna_wgs_frag_len + "/{library_id}_norm_long.bed",
+    params:
+        script = config["dir"]["scripts"]["cfdna_wgs"] + "/frag_window_sum.sh",
+    shell:
+        """
+        {params.script} \
+        {input} \
+        {output.short} \
+        {output.long} &> {log}
+        """
+#+end_src
+- [[file:./workflow/scripts/frag_window_sum.sh][Base script]]
+  #+begin_src bash :tangle ./workflow/scripts/frag_window_sum.sh
+# Snakemake variables
+input_frag="$1"
+output_short="$2"
+output_long="$3"
+
+# Functions
+make_short(){
+    cat $1 | awk '{if ($4 >= 100 && $5 <= 150) print $0}' > $2
+}
+
+make_long(){
+    cat $1 | awk '{if ($4 >= 151 && $5 <= 220) print $0}' > $2
+}
+
+# Run command
+make_short $input_frag $output_short
+make_long $input_frag $output_long
+
+#+end_src
+*** DONE Count fragments intersecting windows                      :smk_rule:
+- Snakemake
+  #+begin_src snakemake
+rule frag_window_int:
+    input:
+        short = cfdna_wgs_frag_len + "/{library_id}_norm_short.bed",
+        long = cfdna_wgs_frag_len + "/{library_id}_norm_long.bed",
+        matbed = "test/inputs/keep.bed",
+    params:
+        script = config["dir"]["scripts"]["cfdna_wgs"] + "/frag_window_int.sh",
+    output:
+        long = cfdna_wgs_frag_cnt + "/{library_id}_cnt_long.tmp",
+        short = cfdna_wgs_frag_cnt + "/{library_id}_cnt_short.tmp",
+    shell:
+        """
+        {params.script} \
+        {input.short} \
+        {input.matbed} \
+        {output.short}
+        {params.script} \
+        {input.long} \
+        {input.matbed} \
+        {output.long}
+        """
+#+end_src
+- [[file:./workflow/scripts/frag_window_int.sh][Base script]]
+  #+begin_src bash :tangle ./workflow/scripts/frag_window_int.sh
+input=$1
+keep_bed=$2
+output=$3
+
+bedtools intersect -c \
+             -a $keep_bed \
+             -b $input > $output
+
+#+end_src
+*** Count merge:smk_rule:
+- Snakemake
+  #+begin_src snakemake
+rule count_merge:
+    input:
+        expand(cfdna_wgs_frag_cnt + "/{library_id}_cnt_{len}.tmp", library_id = LIBRARIES, len = ["short", "long"]),
+    output:
+        config["dir"]["data"]["cfdna_wgs"] + "/frag_counts.tsv",
+    params:
+        script = config["dir"]["scripts"]["cfdna_wgs"] + "/count_merge.sh"
+    shell:
+        """
+        {params.script} \
+	"{input}" \
+        {output}
+        """
+#+end_src
+- [[file:./workflow/scripts/count_merge.sh][Base script]]
+  #+begin_src bash :tangle ./workflow/scripts/count_merge.sh
+array=($1)
+output=$2
+
+if [ -f $output ]; then \rm $output; fi
+
+for file in ${array[@]}; do
+    awk '{{print FILENAME (NF?"\t":"") $0}}' $file |
+        sed 's/^.*lib/lib/g' |
+        sed 's/_.*_/\t/g' |
+        sed 's/\.bed//g' >> $output
+done
+#+end_src
+
+***                                                                     :dev:
+:PROPERTIES:
+:header-args:snakemake: :tangle no
+:END:
+**** Ideas
+- https://www.biostars.org/p/92425/
+- to make own bins
+  - [[id:c0c0ee28-2e41-41a7-9a3b-ae195117a93e][Common bioinformatics file manipulation]] see fasta splitting
+  - "Sequence reads were aligned against the hg19 human reference genome using Bowtie248 and duplicate reads were removed using Sambamba49"
+  - "Post-alignment, each aligned pair was converted to a genomic interval representing the sequenced DNA fragment using bedtools 50."
+  - https://stackoverflow.com/questions/2294493/how-to-get-the-position-of-a-character-in-python
+  - https://bioinformatics.stackexchange.com/questions/5435/how-to-create-a-bed-file-from-fasta
+  - For gc
+    - Parse by Chr
+    - For each Chr, 5 mb bin and calc gc
+    - Get bin position start end
+***                                                                     :ref:
+**** Reference
+- cite:mathios2021
+- https://github.com/cancer-genomics/reproduce_lucas_wflow
+
+** INPROCESS Integration testing
+:PROPERTIES:
+:header-args:snakemake: :tangle ./workflow/int_test.smk
+:END:
+*** Preamble
+#+begin_src snakemake
+cfdna_wgs_frag_bam_inputs = config["dir"]["data"]["cfdna_wgs"] + "/bam/raw"
+cfdna_wgs_frag_filt_bams  = config["dir"]["data"]["cfdna_wgs"] + "/bam/frag"
+cfdna_wgs_frag_beds =       config["dir"]["data"]["cfdna_wgs"] + "/frag"
+cfdna_wgs_distros =         config["dir"]["data"]["cfdna_wgs"] + "/distro"
+cfdna_wgs_logs =            config["dir"]["data"]["cfdna_wgs"] + "/logs"
+cfdna_wgs_frag_len =        config["dir"]["data"]["cfdna_wgs"] + "/len"
+cfdna_wgs_frag_cnt =        config["dir"]["data"]["cfdna_wgs"] + "/bed-frag-cnt"
+
+LIBRARIES = ["lib001", "lib002"]
+
+LIBRARIES_HEALTHY = ["lib001", "lib002"]
+#+end_src
+*** All rule
+#+begin_src snakemake
+rule all:
+    input:
+        expand(cfdna_wgs_frag_filt_bams + "/{library}_filt.bam", library = LIBRARIES),
+        expand(cfdna_wgs_frag_beds      + "/{library_id}_frag.bed", library_id = LIBRARIES),
+        expand(cfdna_wgs_distros        + "/{library_id}_gc_distro.csv", library_id = LIBRARIES),
+        cfdna_wgs_distros + "/healthy_med.rds",
+        expand(cfdna_wgs_frag_beds      + "/{library_id}_frag_sampled.bed", library_id = LIBRARIES),
+        expand(cfdna_wgs_frag_len      + "/{library_id}_norm_short.bed", library_id = LIBRARIES),
+        expand(cfdna_wgs_frag_cnt + "/{library_id}_cnt_long.bed", library_id = LIBRARIES),
+        expand(cfdna_wgs_frag_cnt + "/{library_id}_cnt_short.tmp", library_id = LIBRARIES),
+        config["dir"]["data"]["cfdna_wgs"] + "/frag_counts.tsv",
+
+#+end_src
+*** Include statements
+#+begin_src snakemake
+include: config["dir"]["repo"]["cfdna_wgs"] + "/workflow/frag_bed.smk"
+#+end_src
+** README
+:PROPERTIES:
+:export_file_name: ./README.md
+:export_options: toc:nil ^:nil
+:END:
+*** Changelog
+- [2022-08-31 Wed] Added counts per keep.bed bin
+- [2022-08-29 Mon] Validated to short and long frag bed files
+** Development                                                          :dev:
+*** Count scale:smk_rule:
+- Snakemake
+  #+begin_src snakemake
+rule count_scale:
+    input:
+    output:
+    script:
+        "scripts/count_scale.R"
+#+end_src
+- [[file:./workflow/scripts/count_scale.R][Base script]]
+  #+begin_src R :noweb yes :tangle ./workflow/scripts/count_scale.R
+source("~/repos/mpnst-frag/config/library_loads.R")
+library(tidyverse)
+
+frag_count = read.table("/mnt/ris/aadel/mpnst/frag/frag_counts.tsv", header = F)
+load("/mnt/ris/aadel/mpnst/data_model/data_model.RData")
+
+names(frag_count) = c("library_id","frag_length","chr","start","end","count")
+
+test =
+  frag_count %>%
+  pivot_wider(names_from = frag_length, values_from = count) %>%
+  group_by(library_id,chr,start,end) %>%
+  mutate(ratio = short/long)
+
+washout_libs = c("lib218","lib107","lib117","lib126","lib129","lib142","lib158","lib175","lib182","lib184","lib202","lib205")
+
+
+test2 = libraries_full %>%
+  filter(library_type == "wgs") %>%
+  filter(isolation_type == "cfdna") %>%
+  filter(institution %in% c("nci","washu")) %>%
+  filter(current_dx %in% c("plexiform","healthy") | library_id %in% washout_libs)
+
+
+test2 = libraries_full %>%
+  filter(library_type == "wgs") %>%
+  filter(isolation_type == "cfdna") %>%
+  filter(institution %in% c("nci","washu")) %>%
+  filter(current_dx %in% c("healthy", "plexiform"))
+
+dx = test2 %>% select(library_id, current_dx)
+
+frags =
+  test %>% filter(library_id %in% dx$library_id)
+
+test = frags %>% select(library_id, chr, start, end, ratio) %>% pivot_wider(names_from = library_id, values_from = ratio)
+
+test2 = test
+head(test2)
+test2[4:91] = scale(test2[4:91])
+
+
+test3 = test2 %>% pivot_longer(starts_with("lib"), names_to = "library_id", values_to = "ratio") %>% left_join(dx, by = "library_id")
+
+test3 %>% filter(chr == "chr1") %>% ggplot(., aes(x = start, y = ratio, color = current_dx, group = library_id)) +
+  geom_line(stat = "smooth", span = 0.1, alpha = 0.8, aes(size = current_dx)) + facet_grid(~chr) + scale_size_manual(values = c(5,.5,.5))
+
+
+plot =
+test3 %>% mutate(new_id = library_id) %>%
+mutate(new_id = ifelse(current_dx == "healthy", "healthy", library_id )) %>%
+ggplot(., aes(x = start, y = ratio, group = library_id, color = current_dx, linetype = current_dx)) +
+  geom_line(stat = "smooth", alpha = 0.8, span = 0.3) + facet_wrap(~chr, ncol = 2, scales = "free") + scale_size_manual(values = c(1,.5,.5))
+ggsave(plot, width = 30, height = 40, filename = "/tmp/plot.pdf")
+
+
+plot2 =
+test3 %>% mutate(new_id = library_id) %>%
+mutate(new_id = ifelse(current_dx == "healthy", "healthy", library_id )) %>%
+ggplot(., aes(x = start, y = ratio, group = current_dx, color = current_dx, linetype = current_dx)) +
+  geom_smooth(alpha = 0.8, span = 0.3, aes(fill = current_dx)) + facet_wrap(~chr, ncol = 2, scales = "free")
+ggsave(plot2, width = 30, height = 40, filename = "/tmp/plot2.pdf")
+
+
+
+ geom_line(stat="smooth",method = "lm", formula = y ~ 0 + I(1/x) + I((x-1)/x),
+              size = 1.5,
+              linetype ="dashed",
+              alpha = 0.5)
+
+test3 %>% filter(chr %in% c("chr20","chr17")) %>% ggplot(., aes(x = start, y = ratio, color = current_dx)) + geom_smooth(se = F, span = .2, alpha = 0.1) + facet_grid(~chr)
+
+
+head(test3)
+
+head(test2)
+
+mat = test2[,-c(1,2,3)]
+
+mat = as.matrix(mat)
+
+rownames(mat) = paste(test2$chr,test2$start,test2$end,sep = "_")
+head(mat)
+
+mat = t(mat)
+
+pca = prcomp(mat)
+
+# Get principle component 1 & 2 values
+(pve_pc1=round(100*summary(pca)$importance[2,1]))
+(pve_pc2=round(100*summary(pca)$importance[2,2]))
+
+summary(pca)$importance
+
+head(pca$x)
+
+pca_plot = as.data.frame(pca$x) %>%
+  rownames_to_column(var = "library_id") %>%
+  left_join(dx, by = "library_id") %>%
+  ggplot(., aes(x = PC1, y = PC2, color = current_dx)) +
+  geom_point(size = 4)
+pca_plot
+
++
+  theme_cowplot() +
+  xlab(paste("PC1, ", pve_pc1, "% variance explained", sep ="")) +
+  ylab(paste("PC2, ", pve_pc2, "% variance explained", sep =""))
+pca_plot
+
+
+pca_plot = as.data.frame(pca$x) %>%
+  rownames_to_column(var = "sample_id") %>%
+  mutate(cohort_id = ifelse(grepl("a", sample_id), "ir", "sham")) %>%
+  ggplot(., aes(x = PC1, y = PC2, color = cohort_id)) +
+  geom_point(size = 4) +
+  theme_cowplot() +
+  xlab(paste("PC1, ", pve_pc1, "% variance explained", sep ="")) +
+  ylab(paste("PC2, ", pve_pc2, "% variance explained", sep =""))
+pca_plot
+
+
+head(test3)
+head(test)
+%>%
+  mutate_at(vars(starts_with("lib")), ~(scale(.) %>% as.vector))
+
+head(test2)
+
+
+... or you could just do dat[columns] <- scale(dat[columns]), which has worked consistently for the past 20 years ;-) –
+
+dat2 <- dat %>% mutate_at(c("y", "z"), ~(scale(.) %>% as.vector))
+dat2
+test2 = test[, -c(1,2,3)]
+
+test2 = as.matrix(test2)
+
+scale(test2)
+
+%>% mutate_at(vars(starts_with("lib")), funs(c(scale(.))))
+
+head(test2)
+     mutate_at(c(3,6), funs(c(scale(.))))
+
+
+
+frags %>% ggplot(., aes(x = start, y = ratio))
+
+head(frag_count)
+
+frags %>% pivot_wider(names_from = library_id)
+test2
+
+test2$current_dx
+libraries_full$institution
+
+  names(libraries_full)
+ls()
+head(test)
+  group_by
+
+  pivot_wider(names_from = station, values_from = seen)
+
+
+
+
+head(frag_count)
+#+end_src
+*** Ideas
+:PROPERTIES:
+:END:
+- multimappers in bedtools would need a CIGAR filt (no flag) https://www.biostars.org/p/239772/
+- [ ] make hg38 gc filter https://stackoverflow.com/questions/8551349/how-to-sum-up-every-10-lines-and-calculate-average-using-awk
+frag heat map
+do nearest gene to frag diff
+
+#+begin_src R
+library(tidyverse)
+library(readxl)
+
+gc_map = read_excel("resources/41467_2021_24994_MOESM4_ESM.xlsx", sheet = "s12", skip = 1)
+gc_map
+
+write.table(gc_map, file = "resources/mathios2021_gc_mappability.tsv", row.names=FALSE, sep="\t")
+
+max_rows = nrow(gc_map)
+
+gc_map_bed = read_excel("resources/41467_2021_24994_MOESM4_ESM.xlsx", col_names = FALSE, sheet = "s12", range = cell_limits(c(3,1), c(max_rows,3)))
+gc_map_bed
+
+options(scipen=99999999)
+
+write.table(gc_map_bed, file = "resources/mathios2021_gc_mappability.bed", row.names = FALSE, col.names = FALSE, sep = "\t", quote = FALSE)
+
+# Did liftover manually on UCSC website. This returns hglft_genome_d1c_8c9530.bed
+#+end_src
+- mappability https://bismap.hoffmanlab.org/
+
+#+begin_src R
+source('./src/setup.R'); load("./data/data_model.RData"); source("./src/high-pretx-preprocessing.R"); source("./src/Taylor_additional_packages.R")
+
+####Load fragment summary data frame####
+fragcount<-read.delim("./data/frag_size_summary.tsv")
+  fragcount$server<-fragcount$sample #create duplicate column that will parse to sample name. Will use this id for merging w/ TF data
+  fragcount$filter<- ifelse(grepl("frag",fragcount$server),'filtered','unfiltered') #fragment filtered (90 to 150bp) have pathway *.dedup.sorted.frag.sorted.bam, unfiltered are *.dedup.sorted.bam
+  fragcount$sample<-sub(".*/", "", fragcount$sample)
+  fragcount$sample<-sub(".dedup.*", "", fragcount$sample)
+names(fragcount)[names(fragcount) == "sample"] <- "library_id"
+
+frag_unfiltered<- fragcount[(fragcount$filter=="unfiltered"),]
+frag_unfiltered<-frag_unfiltered %>% filter(size <351 & size>0) #filter for <350bp
+frag_unfiltered<- merge(frag_unfiltered, all_mpnst_highest_plex_healthy, by="library_id", all = FALSE) %>% select(library_id, institution, current_dx, tf, size, occurences)
+
+rm(fragcount); gc()
+
+####log2 mean densitiy plot####
+#Filtering for 0 to 350bp, all samples (and WUSTL if uncommented)#
+#frag_MPNST_unfiltered<- frag_unfiltered %>% filter(current_dx=="mpnst" & institution=="washu" & size<351 & size >0)
+frag_MPNST_unfiltered<- frag_unfiltered %>% filter(current_dx=="mpnst" & size<351 & size >0)
+mean_MPNST_unfiltered<-aggregate( occurences ~ size, frag_MPNST_unfiltered, mean )
+  mean_MPNST_unfiltered$occurences<-round(mean_MPNST_unfiltered$occurences, digits = 0)
+  mean_MPNST_unfiltered$current_dx<-"MPNST"
+z<-sum(mean_MPNST_unfiltered$occurences)
+mean_MPNST_unfiltered$normalized<-as.numeric((mean_MPNST_unfiltered$occurences)/z)
+
+#frag_pn_unfiltered<- frag_unfiltered %>% filter(current_dx=="plexiform" & institution=="washu" & size<351 & size >0)
+frag_pn_unfiltered<- frag_unfiltered %>% filter(current_dx=="plexiform" & size<351 & size >0)
+mean_pn_unfiltered<-aggregate( occurences ~ size, frag_pn_unfiltered, mean )
+mean_pn_unfiltered$occurences<-round(mean_pn_unfiltered$occurences, digits = 0)
+mean_pn_unfiltered$current_dx<-"PN"
+z<-sum(mean_pn_unfiltered$occurences)
+mean_pn_unfiltered$normalized<-as.numeric((mean_pn_unfiltered$occurences)/z)
+
+combined_mean<-merge(mean_MPNST_unfiltered,mean_pn_unfiltered,by="size")
+  combined_mean$delta<-as.numeric(combined_mean$normalized.x-combined_mean$normalized.y)
+  combined_mean$foldchange<-foldchange(combined_mean$normalized.x, combined_mean$normalized.y)
+  combined_mean$log2<-foldchange2logratio(combined_mean$foldchange,base=2)
+  combined_mean$Diagnosis<- ifelse(combined_mean$log2 < 0, 'Plexiform', 'MPNST')
+z<-min(combined_mean$log2)
+
+log<- ggplot(combined_mean, aes(x = size))+
+  geom_area(aes(y = log2))+
+  geom_vline(xintercept= c(150), linetype="dotted")+
+  scale_x_continuous(name = "Fragment Length (bp)") +
+  scale_y_continuous(name = "Log2ratio mean density") +
+  #scale_fill_manual(values=c("#DE2019", "#000000")) +
+  theme_cowplot(12)+
+  theme(text=element_text(size=15))
+
+ggsave("./imgs/log2_mean_density_all.pdf", log, width=5,height=6)
+rm(frag_MPNST_unfiltered, frag_pn_unfiltered, mean_pn_unfiltered, mean_MPNST_unfiltered, combined_mean, z, log); gc()
+
+####Fragment Analysis 90 to 150bp, all samples####
+frag_MPNST_unfiltered<- frag_unfiltered %>% filter(current_dx=="mpnst" & size<151 & size >89)
+  mean_MPNST_unfiltered<-aggregate( occurences ~ size, frag_MPNST_unfiltered, mean )
+  mean_MPNST_unfiltered$occurences<-round(mean_MPNST_unfiltered$occurences, digits = 0)
+  mean_MPNST_unfiltered$current_dx<-"MPNST"
+z<-sum(mean_MPNST_unfiltered$occurences)
+mean_MPNST_unfiltered$normalized<-as.numeric((mean_MPNST_unfiltered$occurences)/z)
+
+frag_pn_unfiltered<- frag_unfiltered %>% filter(current_dx=="plexiform" & size<151 & size >89)
+  mean_pn_unfiltered<-aggregate( occurences ~ size, frag_pn_unfiltered, mean )
+  mean_pn_unfiltered$occurences<-round(mean_pn_unfiltered$occurences, digits = 0)
+  mean_pn_unfiltered$current_dx<-"PN"
+z<-sum(mean_pn_unfiltered$occurences)
+mean_pn_unfiltered$normalized<-as.numeric((mean_pn_unfiltered$occurences)/z)
+
+frag_healthy_unfiltered<- frag_unfiltered %>% filter(current_dx=="healthy" & size<151 & size >89)
+  mean_healthy_unfiltered<-aggregate( occurences ~ size, frag_healthy_unfiltered, mean )
+  mean_healthy_unfiltered$occurences<-round(mean_healthy_unfiltered$occurences, digits = 0)
+  mean_healthy_unfiltered$current_dx<-"Healthy"
+z<-sum(mean_healthy_unfiltered$occurences)
+mean_healthy_unfiltered$normalized<-as.numeric((mean_healthy_unfiltered$occurences)/z)
+
+mpnst_expanded<- mean_MPNST_unfiltered %>%  uncount(occurences)
+pn_expanded<-mean_pn_unfiltered %>%  uncount(occurences)
+healthy_expanded<-mean_healthy_unfiltered %>%  uncount(occurences)
+
+####KS Calculations: PN, MPNST, Healthy####
+KS_MPNST_PN_p_value<-format.pval(ks.test(mpnst_expanded$size, pn_expanded$size)$p.value)
+KS_MPNST_PN<-ks.test(mpnst_expanded$size, pn_expanded$size)
+capture.output(KS_MPNST_PN, file="./results/Fragment_KS.txt", append=TRUE)
+write(paste("p-value from NCI/WUSTL MPNST v PN size distributions 90 to 150bp:", KS_MPNST_PN_p_value, "\n"),
+      file = "./results/Fragment_KS.txt", append=TRUE)
+rm(KS_MPNST_PN_p_value, KS_MPNST_PN)
+gc()
+
+KS_PN_Healthy_p_value<-format.pval(ks.test(pn_expanded$size, healthy_expanded$size)$p.value)
+KS_PN_Healthy<-ks.test(pn_expanded$size, healthy_expanded$size)
+capture.output(KS_PN_Healthy, file="./results/Fragment_KS.txt", append=TRUE)
+write(paste("p-value from NCI/WUSTL PN v Healthy size distributions 90 to 150bp:", KS_PN_Healthy_p_value, "\n"),
+      file = "./results/Fragment_KS.txt", append=TRUE)
+
+rm(KS_PN_Healthy_p_value, KS_PN_Healthy)
+gc()
+
+KS_MPNST_Healthy_p_value<-format.pval(ks.test(mpnst_expanded$size, healthy_expanded$size)$p.value)
+KS_MPNST_Healthy<-ks.test(mpnst_expanded$size, healthy_expanded$size)
+capture.output(KS_MPNST_Healthy, file="./results/Fragment_KS.txt", append=TRUE)
+write(paste("p-value from NCI/WUSTL MPNST v Healthy size distributions 90 to 150bp:", KS_MPNST_Healthy_p_value, "\n"),
+      file = "./results/Fragment_KS.txt", append=TRUE)
+
+rm(KS_MPNST_Healthy_p_value, KS_MPNST_Healthy)
+gc()
+
+####90 to 150 mpnst, pn, healthy bp density plot####
+combined<-rbind(healthy_expanded, mpnst_expanded, pn_expanded)
+rm(healthy_expanded, mpnst_expanded, pn_expanded, frag_MPNST_unfiltered, frag_pn_unfiltered, frag_healthy_unfiltered)
+#myorder <- c("Healthy", "PN", "MPNST")
+myorder <- c("MPNST", "PN", "Healthy")
+combined <- combined %>%
+  mutate(current_dx = factor(current_dx, levels = rev(myorder)))
+
+Fragments_90to150<-ggplot()+
+  geom_density(data=combined,aes(x= size, color=current_dx), alpha=0.5) +
+  scale_x_continuous(name = "Fragment Length (bp)") +
+  scale_y_continuous(name = "Density") +
+  scale_color_manual("Diagnosis", values=c(MPNST=col_mpnst, PN=col_plex, Healthy= col_healthy)) +
+  theme_cowplot(12)+
+  theme(text=element_text(size=15), legend.position = c(0.05, 0.9))
+
+ggsave("./imgs/90-150bp_PN_MPNST_Healthy.pdf",Fragments_90to150, width=5,height=6)
+
+rm(combined, Fragments_90to150, mean_MPNST_unfiltered, mean_pn_unfiltered, mean_healthy_unfiltered); gc()
+
+####High/Low Tumor Fraction Fragment Distribution Comparison-####
+frag_unfiltered<-frag_unfiltered %>% filter(current_dx %in% c("plexiform","mpnst")) #Filter out healthy
+cutoff<-0.0413
+
+###90 to 150 bp Combined above/belowTF cutoff- all lesions####
+low_cutoff_unfiltered<-frag_unfiltered%>% filter(tf < cutoff) %>%filter(size <151 & size >89) %>% mutate(cutoff="low") %>% select(library_id,size,occurences,cutoff)
+mean_low_cutoff_unfiltered<-aggregate( occurences ~ size, low_cutoff_unfiltered, mean )
+  mean_low_cutoff_unfiltered$occurences<-round(mean_low_cutoff_unfiltered$occurences, digits = 0)
+  mean_low_cutoff_unfiltered$cutoff<-"Low"
+  mean_low_cutoff_unfiltered<- mean_low_cutoff_unfiltered %>% uncount(occurences)
+
+high_cutoff_unfiltered<-frag_unfiltered%>% filter(tf > cutoff|tf==cutoff) %>%filter(size <151 & size >89) %>% mutate(cutoff="low") %>% select(library_id,size,occurences,cutoff)
+mean_high_cutoff_unfiltered<-aggregate( occurences ~ size, high_cutoff_unfiltered, mean )
+  mean_high_cutoff_unfiltered$occurences<-round(mean_high_cutoff_unfiltered$occurences, digits = 0)
+  mean_high_cutoff_unfiltered$cutoff<-"High"
+  mean_high_cutoff_unfiltered<-mean_high_cutoff_unfiltered %>% uncount(occurences)
+
+KS_TF_high_low_p_value<-format.pval(ks.test(mean_high_cutoff_unfiltered$size, mean_low_cutoff_unfiltered$size)$p.value)
+KS_TF_high_low_Healthy<-ks.test(mean_high_cutoff_unfiltered$size, mean_low_cutoff_unfiltered$size)
+capture.output(KS_TF_high_low_Healthy, file="./results/Fragment_KS.txt", append=TRUE)
+write(paste("p-value from NCI/WUSTL TF high versus low size distributions 90 to 150 bp no healthies:", KS_TF_high_low_p_value, "\n"),
+      file = "./results/Fragment_KS.txt", append=TRUE)
+
+df<-rbind(mean_low_cutoff_unfiltered, mean_high_cutoff_unfiltered )
+rm(mean_low_cutoff_unfiltered,mean_high_cutoff_unfiltered, high_cutoff_unfiltered, low_cutoff_unfiltered) + gc()
+
+#Calculate density curve intercepts (https://stackoverflow.com/questions/25453706/how-to-find-the-intersection-of-two-densities-with-ggplot2-in-r)
+lower.limit <- min(df$size)
+upper.limit <- max(df$size)
+High.density <- density(subset(df, cutoff == "High")$size, from = lower.limit, to = upper.limit, n = 2^10)
+Low.density <- density(subset(df, cutoff == "Low")$size, from = lower.limit, to = upper.limit, n = 2^10)
+density.difference <- High.density$y - Low.density$y
+intersection.point90to150 <- High.density$x[which(diff(density.difference > 0) != 0) + 1]
+
+write(paste("90 to 150 bp TF high and TF low intercept (no healthies):", intersection.point90to150, "\n"),
+      file = "./results/Fragment_KS.txt", append=TRUE)
+
+#Plot TF high/low
+tfhighlow<-ggplot(df, aes(x = size, colour = cutoff))+
+  geom_density(size=1.5) +
+  geom_vline(xintercept= intersection.point90to150, linetype="dotted", size=1.2)+
+  scale_x_continuous(breaks=c(100, 125, 150), name = "Fragment Length (bp)") +
+  scale_y_continuous(name = "Density") +
+  scale_color_manual("Tumor Fraction",values=c(High="#FDB309", Low="#442DDB")) +
+  scale_fill_manual("Tumor Fraction",values=c(High="#FDB309", Low="#442DDB")) +
+  labs(color="Tumor Fraction")+
+  theme_cowplot(12)+
+  theme(legend.position = "top", legend.justification="left",text=element_text(size=15), plot.title = element_text(size=15, hjust = 0.5))
+ggsave("./imgs/Figure4c-tf_highlow_fragment_density_plots.pdf", tfhighlow, width=5,height=6)
+
+rm(Fragments_90to150, frag_unfiltered, frag_pn_unfiltered, frag_MPNST_unfiltered, frag_healthy_unfiltered, healthy_expanded, pn_expanded, mpnst_expanded, high_cutoff_unfiltered, low_cutoff_unfiltered, High.density, KS_TF_high_low_Healthy, KS_TF_high_low_p_value, Low.density, High.density, tfhighlow, mean_high_cutoff_unfiltered, mean_low_cutoff_unfiltered, df);gc()
+
+#+end_src
+- ggridgeplot of frag distros
+
+def getTargets():
+    targets = list()
+    for r in config["TESTLIBS"]:
+	targets.append(config["data_dir"] + "/frag/" + config["TESTLIBS"] + "_norm_frag.bed")
+
+    return targets
+
+- [ ] need to evaulate gc binning by pcr cycle
+**** transform to mean zero unit sd
+https://stats.stackexchange.com/questions/305672/what-is-unit-standard-deviation
+
+**** Ideas
+ALLLIB = []
+for number in range(1,249):
+    ALLLIB.append((str("lib"f"{number:03d}")))
+ALLLIB.remove("lib115")
+ALLLIB.remove("lib118")
+ALLLIB.remove("lib200")
+ALLLIB.remove("lib234")
+ALLLIB.remove("lib240")
+
+
+- https://bioconductor.org/packages/release/bioc/vignettes/BiocParallel/inst/doc/Introduction_To_BiocParallel.pdf
+
+- ideas
+  - Reference binning output metrics- bins count, included bins count, total included bins bases
+- ?downsample
+- https://bioconductor.org/packages/release/bioc/vignettes/BiocParallel/inst/doc/Introduction_To_BiocParallel.pdf
+
+***** Exclude fasta map GC
+:LOGBOOK:
+CLOCK: [2021-12-08 Wed 10:58]--[2021-12-08 Wed 11:34] =>  0:36
+CLOCK: [2021-12-08 Wed 10:08]--[2021-12-08 Wed 10:58] =>  0:50
+CLOCK: [2021-11-29 Mon 12:44]--[2021-11-29 Mon 13:05] =>  0:21
+:END:
+#+begin_src snakemake
+rule exclude_fasta_map_gc:
+    input:
+        bam = config["data_dir"] + "/bam/{library}_duke.bam",
+        blacklist = config["data_dir"] + "/inputs/mathios_chrom_bins.bed",
+    output:
+        config["data_dir"] + "/bam/{library}_mathios.bam",
+    shell:
+        """
+	bedtools intersect -a {input.bam} -b {input.blacklist} -v > {output}
+        """
+#+end_src
+#+begin_src R
+source(file.path(paste0("./config/", as.character(Sys.info()["nodename"]), ".R")))
+
+chrom_bins = read.csv(file.path(data_dir,"inputs/mathios_keep.csv"), header = T)
+
+chrom_bins
+
+chrom_bins_exclude = chrom_bins %>%
+  filter(gc < 0.3)
+
+chrom_bins_exclude
+
+library(dplyr)
+
+
+#chrom_bins = read.csv(file.path(data_dir,"inputs/mathios_chrom_bins.csv"), header = T)
+
+#+end_src
+
+
+
+ To cap-
+ture large-scale epigenetic differences in fragmentation across the genome estimable
+from low-coverage whole-genome sequencing, we tiled the hg19 reference genome
+into non-overlapping 5 Mb bins (Supplementary Table 12). Bins with an average
+GC content <0.3 and an average mappability <0.9 were excluded, leaving 473 bins
+spanning approximately 2.4 GB of the genome (Supplementary Table 11).
+"
+
+#+begin_src bash
+sudo groupadd conda
+sudo usermod -a -G conda jszymanski
+
+#########1#########2#########3#########4#########5#########6#########7#########8
+
+sudo chown -R jszymanski:conda /opt/mambaforge
+sudo chmod -R 774 /opt/mambaforge
+
+#########1#########2#########3#########4#########5#########6#########7#########8
+source config/${HOSTNAME}.sh
+
+conda install -c bioconda ucsc-fasplit
+
+y
+
+conda install -c bioconda seqkit
+y
+
+#########1#########2#########3#########4#########5#########6#########7#########8
+if [ ! -f "${data_dir}/inputs/hg19.fa" ]; then gunzip -c "${data_dir}/inputs/hg19.fa.gz" "${data_dir}/inputs/hg19.fa"; fi
+
+faSplit size ${data_dir}/inputs/hg19.fa 5000000 -oneFile /tmp/test.fa
+
+seqkit fx2tab --name --header-line --gc /tmp/test.fa.fa > /tmp/res2
+
+| awk -F "\t" '{if ($2 < 35) print $1}' | xargs -n 1 sh -c 'seqkit grep --pattern "$0" /tmp/test.fa.fa' > /tmp/results.fa
+
+
+# https://www.biostars.org/p/9465609/
+seqkit fx2tab --name --only-id --gc contigs.fa | awk -F "\t" '{if ($2 < 35) print $1}' | xargs -n 1 sh -c 'seqkit grep --pattern "$0" contigs.fa' > results.fa
+
+
+Options:
+    -verbose=2 - Write names of each file created (=3 more details)
+    -maxN=N - Suppress pieces with more than maxN n's.  Only used with size.
+              default is size-1 (only suppresses pieces that are all N).
+    -oneFile - Put output in one file. Only used with size
+    -extra=N - Add N extra bytes at the end to form overlapping pieces.  Only used with size.
+    -out=outFile Get masking from outfile.  Only used with size.
+    -lift=file.lft Put info on how to reconstruct sequence from
+                   pieces in file.lft.  Only used with size and gap.
+    -minGapSize=X Consider a block of Ns to be a gap if block size >= X.
+                  Default value 1000.  Only used with gap.
+    -noGapDrops - include all N's when splitting by gap.
+    -outDirDepth=N Create N levels of output directory under current dir.
+                   This helps prevent NFS problems with a large number of
+                   file in a directory.  Using -outDirDepth=3 would
+                   produce ./1/2/3/outRoot123.fa.
+    -prefixLength=N - used with byname option. create a separate output
+                   file for each group of sequences names with same prefix
+                   of length N.
+
+(base) jszymanski@aclm350:/drive3/users/jszymanski/repos/mpnst$
+#+end_src
+
+
+- https://github.com/mdshw5/pyfaidx/ -x command
+- /tmp/test.fasta
+- https://crashcourse.housegordon.org/split-fasta-files.html
+- https://pythonhosted.org/pyfaidx/
+- https://stackoverflow.com/questions/17060039/split-string-at-nth-occurrence-of-a-given-character/17060409
+***** Fetch inputs
+#+begin_src python
+rule fetch_inputs:
+    output:
+        fa_zip = config["data_dir"] + "inputs/hg19.fa.gz",
+	fa_unzip = config["data_dir"] + "inputs/hg19.fa"
+    shell:
+        """
+        if [ ! -f {output.fa_zip} ]; then wget -O {output.fa_zip} http://hgdownload.cse.ucsc.edu/goldenPath/hg19/bigZips/hg19.fa.gz; fi
+        if [ ! -f {output.fa_unzip} ]; then gunzip --to-stdout {output.fa_zip} > {output.fa_unzip}; fi
+        """
+#+end_src
+
+
+***** Filtered FASTA to bed
+#+begin_src snakemake
+rule filtered_fasta_to_bed:
+    input:
+        config["data_dir"] + "/test/bam/{library}_mathios.bam",
+    output:
+
+    shell:
+        """
+        """
+#+end_src
+***** Filtered FASTA to frag summary
+:LOGBOOK:
+CLOCK: [2021-12-08 Wed 11:34]--[2021-12-08 Wed 12:05] =>  0:31
+:END:
+
+rule filtered_fasta_to_frag_summary:
+    input:
+        config["data_dir"] + "/bam/{library}_mathios.bam"
+    output:
+        config["data_dir"] + "/frag/{library}_frag.tsv"
+    shell:
+        """
+        sambamba view -t CORES {input} \
+        | awk -F'\t' |
+        """
+
+frag_filter(){
+# Takes indexed bam. Returns bam with only fragments of specified range
+# Input parameters:
+#  $1 = input bam
+#  $2 = output directory
+#  $3 = lower fragment length
+#  $4 = upper fragment length
+#  $5 = number of cores used
+# Steps
+##
+    ## Filter by absolute value of TLEN for each read
+    sambamba view -t $5 $1 \
+        | awk -F'\t' -v upper="$4" 'sqrt($9*$9) < upper {print $0}' \                                     |
+        | awk -F'\t' -v lower="$3" 'sqrt($9*$9) > lower {print $0}' > $2/${base}_frag"${3}"_"${4}".nohead |
+    ## Restore header
+    samtools view -H $1 > $2/${base}_frag"${3}"_"${4}".onlyhead
+    cat $2/${base}_frag"${3}"_"${4}".onlyhead $2/${base}_frag"${3}"_"${4}".nohead > $2/${base}_frag"${3}"_"${4}".sam
+    ## Create filtered bam, sort, and index
+    echo "$base fragment filtered, now re-sorting and indexing"
+    sambamba view -t $5 -S -f bam $2/${base}_frag"${3}"_"${4}".sam > $2/${base}_frag"${3}"_"${4}".bam
+    sambamba sort -t $5 -o $2/${base}_frag"${3}"_"${4}"_sorted.bam $2/${base}_frag"${3}"_"${4}".bam
+    ## Clean up intermediate files
+    rm -f $2/*.nohead
+    rm -f $2/*.onlyhead
+    rm -f $2/*.sam
+    rm $2/${base}_frag"${3}"_"${4}".bam
+}
+**** GC and mappability
+- likely solutions
+  - https://wiki.bits.vib.be/index.php/Create_a_GC_content_track
+  - http://genome.ucsc.edu/goldenPath/help/bigWig.html bigwig summary
+- https://bismap.hoffmanlab.org/
+  - http://hgdownload.soe.ucsc.edu/gbdb/hg38/hoffmanMappability/
+- gc5BaseBw
+- "To capture large-scale epigenetic differences in fragmentation across the genome estimable from low-coverage whole-genome sequencing, we tiled the hg19 reference genome into non-overlapping 5 Mb bins (Supplementary Table 12). Bins with an average GC content <0.3 and an average mappability <0.9 were excluded, leaving 473 bins spanning approximately 2.4 GB of the genome (Supplementary Table 11)." cite:mathios2021
+- break fasta into chroms
+- for each chrome, tile into 5 mb bins
+- for each bin, calculate GC
+- for each bin, calculate average mappability
+
+- FOR HG38 JUST USE BLACKLIST, IGNORE MAPPABILIT SCORE?
+- Mappability wig
+- Wig2bed https://bedops.readthedocs.io/en/latest/content/reference/file-management/conversion/wig2bed.html
+
+https://genome.ucsc.edu/cgi-bin/hgTables?hgsid=1343600709_h27mHfkbguw1osJvTiSMdXaTLNXF&clade=mammal&org=Human&db=hg38&hgta_group=map&hgta_track=umap&hgta_table=umap100Quantitative&hgta_regionType=range&position=chr12%3A56%2C694%2C976-56%2C714%2C605&hgta_outputType=primaryTable&hgta_outFileName=
+
+Stats vs 5mb windows- can do column counts
+
+Gc per window
+
+Filter to new bed
+
+- bams currently come from cfdna-cna
+- blacklists currently from https://github.com/Boyle-Lab/Blacklist/tree/master/lists
+#+begin_src bash
+#!/usr/bin/env bash
+
+# Functions
+wget_std(){
+    wget \
+        --continue \
+        --execute robots=off \
+        --no-check-certificate \
+        --no-parent \
+        --output-document $2 \
+        --timestamping $1 2>> $3
+}
+
+# Snakemake variables
+params_url=$1
+output_duke_zip=$(realpath $2)
+output_duke_unzip=$(realpath $3)
+log=$(realpath $4)
+
+# Run command
+wget_std "$params_url" "$output_duke_zip" "$log"
+gunzip -c "$output_duke_zip" > "$output_duke_unzip" 2>> "$log"
+
+#+end_src
+
+
+-

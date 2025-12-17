@@ -5,3 +5,7 @@
 **/.cache
 **/.config
 **/.java
+# --- test data (auto-managed by get_test_data.sh) ---
+tests/full/*
+!tests/full/inputs/
+!tests/full/inputs/**
