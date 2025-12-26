@@ -1,0 +1,5 @@
+r1_basename	r2_basename	library_id
+SRR3819937_1.fastq.gz	SRR3819937_2.fastq.gz	lib001
+SRR3819938_1.fastq.gz	SRR3819938_2.fastq.gz	lib002
+SRR3819939_1.fastq.gz	SRR3819939_2.fastq.gz	lib003
+SRR3819940_1.fastq.gz	SRR3819940_2.fastq.gz	lib004

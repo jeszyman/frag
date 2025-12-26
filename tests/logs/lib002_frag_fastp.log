@@ -1,0 +1,52 @@
+[fastp] Fri Dec 19 11:25:53 AM CST 2025 lib=lib002 threads=8
+Detecting adapter sequence for read1...
+No adapter detected for read1
+
+Detecting adapter sequence for read2...
+No adapter detected for read2
+
+Read1 before filtering:
+total reads: 60000
+total bases: 4505408
+Q20 bases: 4472232(99.2636%)
+Q30 bases: 4381494(97.2497%)
+Q40 bases: 3606471(80.0476%)
+
+Read2 before filtering:
+total reads: 60000
+total bases: 4479948
+Q20 bases: 4420793(98.6796%)
+Q30 bases: 4278644(95.5066%)
+Q40 bases: 3288619(73.4075%)
+
+Read1 after filtering:
+total reads: 60000
+total bases: 4501920
+Q20 bases: 4468848(99.2654%)
+Q30 bases: 4378278(97.2536%)
+Q40 bases: 3603862(80.0517%)
+
+Read2 after filtering:
+total reads: 60000
+total bases: 4476669
+Q20 bases: 4417689(98.6825%)
+Q30 bases: 4275805(95.5131%)
+Q40 bases: 3286761(73.4198%)
+
+Filtering result:
+reads passed filter: 120000
+reads failed due to low quality: 0
+reads failed due to too many N: 0
+reads failed due to too short: 0
+reads with adapter trimmed: 222
+bases trimmed due to adapters: 6767
+
+Duplication rate: 11.3817%
+
+Insert size peak (evaluated by paired-end reads): 112
+
+JSON report: tests/full/qc/lib002_frag_fastp.json
+HTML report: tests/full/qc/lib002_frag_fastp.html
+
+fastp --detect_adapter_for_pe --disable_quality_filtering --in1 tests/full/fastqs/lib002.raw_R1.fastq.gz --in2 tests/full/fastqs/lib002.raw_R2.fastq.gz --out1 tests/full/fastqs/lib002.processed_R1.fastq.gz --out2 tests/full/fastqs/lib002.processed_R2.fastq.gz --failed_out tests/full/fastqs/lib002.failed.fastq.gz --json tests/full/qc/lib002_frag_fastp.json --html tests/full/qc/lib002_frag_fastp.html --thread 8 
+fastp v1.0.1, time used: 4 seconds

@@ -1,0 +1,12 @@
+name: frag
+
+channels:
+  - conda-forge
+  - bioconda
+
+dependencies:
+  - fastp
+  - fastqc
+  - bedtools
+  - samtools
+  - bwa

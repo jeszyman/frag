@@ -248,10 +248,203 @@ main "$@"
 #+end_src
 
 *** Org update
+- save emacs buffer
+- update readme
+- tangle repo
+- git update
+
+#+begin_src bash :tangle ./tools/shell/org_update.sh
+#!/usr/bin/env bash
+set -euo pipefail
+
+# -----------------------------------------------------------------------------
+# org_update.sh
+#
+# Orchestrate a small repo maintenance workflow:
+#   1) Save open Emacs buffers via emacsclient (if a server is available)
+#   2) Tangle selected repo Org files
+#   3) Export a README.md from a specific Org node (via a Python helper)
+#   4) Save buffers again (best-effort)
+#   5) Run a git update workflow in each repo (via basecamp_functions.sh)
+#
+# Diagnostics are written to stderr. Stdout is reserved for primary outputs.
+# -----------------------------------------------------------------------------
+
+# =============================================================================
+# SECTION: CONFIGURATION
+# =============================================================================
+
+BASECAMP_LIB="${BASECAMP_LIB:-${HOME}/repos/basecamp/lib/basecamp_functions.sh}"
+
+REPOS=(
+  frag
+)
+
+REPO_DIR="${HOME}/repos/frag"
+README_ORG="${REPO_DIR}/frag.org"
+README_NODE="339b69f6-6c09-4e9d-a2ec-27bdf5747163"
+README_EXPORT="${HOME}/repos/emacs/scripts/emacs_export_header_to_markdown.py"
+
+# =============================================================================
+# SECTION: USAGE AND INPUT PARSING
+# =============================================================================
+
+print_usage() {
+  cat <<EOF
+Usage: ${0##*/} [OPTIONS]
+
+Run a repo maintenance workflow: save Emacs buffers, tangle Org files, export
+README.md, and run a git update workflow.
+
+Options:
+  -h, --help  Show this help message and exit
+
+Examples:
+  ${0##*/}
+
+EOF
+}
+
+parse_args() {
+  if [[ $# -gt 0 ]]; then
+    case "${1:-}" in
+      -h|--help)
+        print_usage
+        exit 0
+        ;;
+      ,*)
+        echo "Error: Unrecognized argument: ${1:-}" >&2
+        echo >&2
+        print_usage >&2
+        exit 2
+        ;;
+    esac
+  fi
+
+  if [[ ! -r "$BASECAMP_LIB" ]]; then
+    echo "Error: BASECAMP_LIB not readable: $BASECAMP_LIB" >&2
+    exit 1
+  fi
+
+  if [[ ! -d "$REPO_DIR" ]]; then
+    echo "Error: REPO_DIR not found: $REPO_DIR" >&2
+    exit 1
+  fi
+
+  if [[ ! -f "$README_ORG" ]]; then
+    echo "Error: README_ORG not found: $README_ORG" >&2
+    exit 1
+  fi
+
+  if [[ ! -f "$README_EXPORT" ]]; then
+    echo "Error: README_EXPORT script not found: $README_EXPORT" >&2
+    exit 1
+  fi
+}
+
+
+################
+###   Main   ###
+################
+
+
+main() {
+  parse_args "$@"
+
+  source "$BASECAMP_LIB"
+
+  save_in_emacs
+
+  for repo in "${REPOS[@]}"; do
+    tangle_repo_org "$repo" || true
+  done
+
+  update_readme
+  save_in_emacs
+
+  for repo in "${REPOS[@]}"; do
+    git_update_repo "$repo" || true
+  done
+}
+
+# =============================================================================
+# SECTION: WORK FUNCTIONS
+# =============================================================================
+
+emacs_server_available() {
+  command -v emacsclient >/dev/null 2>&1 && emacsclient -e "(progn t)" >/dev/null 2>&1
+}
+
+save_in_emacs() {
+  if emacs_server_available; then
+    emacsclient -e "(save-some-buffers t)" >/dev/null
+    echo "[INFO] Saved buffers via emacsclient" >&2
+  else
+    echo "[INFO] No Emacs server; skipping save" >&2
+  fi
+}
+
+update_readme() {
+  echo "[INFO] Exporting README.md from: $README_ORG" >&2
+
+  pushd "$REPO_DIR" >/dev/null
+  python3 "$README_EXPORT" --org_file "$README_ORG" --node_id "$README_NODE"
+  popd >/dev/null
+}
+
+tangle_repo_org() {
+  local repo="$1"
+  local org_file="${HOME}/repos/${repo}/${repo}.org"
+
+  echo "[INFO] Repo: $repo" >&2
+
+  if [[ -f "$org_file" ]]; then
+    echo "[INFO] Tangling: $org_file" >&2
+    tangle "$org_file"
+  else
+    echo "[WARN] Missing Org file; skipping: $org_file" >&2
+  fi
+}
+
+git_update_repo() {
+  local repo="$1"
+  local repo_dir="${HOME}/repos/${repo}"
+  local output=""
+
+  echo "[INFO] Updating git workflow: $repo" >&2
+
+  if [[ ! -d "$repo_dir" ]]; then
+    echo "[WARN] Repo directory missing; skipping: $repo_dir" >&2
+    return 0
+  fi
+
+  pushd "$repo_dir" >/dev/null
+
+  if ! output="$(git_wkflow_up 2>&1)"; then
+    echo "[ERROR] git_wkflow_up failed in: $repo" >&2
+    echo "$output" >&2
+    popd >/dev/null
+    return 1
+  fi
+
+  printf '%s\n%s\n' "$(date)" "$output" >&2
+  popd >/dev/null
+}
+
+# =============================================================================
+# SECTION: ENTRY POINT
+# =============================================================================
+
+main "$@"
+#+end_src
+
 *** README
 :PROPERTIES:
 :ID:       339b69f6-6c09-4e9d-a2ec-27bdf5747163
 :END:
+**** Change Log
+- Development since last tag
+  - [2025-12-17 Wed] Added test data set
 *** TODO Integration testing setup
 #+begin_src bash
 wget https://hgdownload.cse.ucsc.edu/goldenpath/hg38/chromosomes/chr19.fa.gz --directory-prefix=test/inputs
@@ -758,6 +951,293 @@ include: config["dir"]["repo"]["cfdna_wgs"] + "/workflow/frag_bed.smk"
 *** Changelog
 - [2022-08-31 Wed] Added counts per keep.bed bin
 - [2022-08-29 Mon] Validated to short and long frag bed files
+** Basic fragmentomics sequence processing
+:properties:
+:header-args:snakemake: :tangle ./workflows/frag.smk
+:end:
+
+*** FASTQ processing
+#+begin_src snakemake
+rule frag_fastp:
+    message: "Fragmentomics fastp FASTQ processing"
+    conda: CONDA_FRAG
+    threads: 8
+    params:
+        extra = config.get("fastp", {}).get("extra", ""),
+    input:
+        r1 = f"{D_FRAG}/fastqs/{{library_id}}.raw_R1.fastq.gz",
+        r2 = f"{D_FRAG}/fastqs/{{library_id}}.raw_R2.fastq.gz",
+    output:
+        failed = f"{D_FRAG}/fastqs/{{library_id}}.failed.fastq.gz",
+        html = f"{D_FRAG}/qc/{{library_id}}_frag_fastp.html",
+        json = f"{D_FRAG}/qc/{{library_id}}_frag_fastp.json",
+        r1     = f"{D_FRAG}/fastqs/{{library_id}}.processed_R1.fastq.gz",
+        r2     = f"{D_FRAG}/fastqs/{{library_id}}.processed_R2.fastq.gz",
+    log:
+        cmd  = f"{D_LOGS}/{{library_id}}_frag_fastp.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{library_id}}_frag_fastp.tsv"
+    shell:
+        """
+        # Logging and console output
+        exec &>> "{log.cmd}"
+        echo "[fastp] $(date) lib={wildcards.library_id} threads={threads}"
+
+        # Main
+        fastp \
+          --detect_adapter_for_pe \
+          --disable_quality_filtering \
+          --in1 "{input.r1}" --in2 "{input.r2}" \
+          --out1 "{output.r1}" --out2 "{output.r2}" \
+          --failed_out "{output.failed}" \
+          --json "{output.json}" --html "{output.html}" \
+          --thread {threads} \
+          {params.extra}
+        """
+
+#+end_src
+*** Alignment
+**** BWA index
+#+begin_src snakemake
+rule frag_bwa_index:
+    message: "Index reference fasta for BWA alignment",
+    conda: CONDA_FRAG,
+    input:
+        lambda wc: f"{D_INPUTS}/{config['frag_ref_assemblies'][wc.ref_name]['input']}"
+    output:
+        fa   = f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa",
+        fai  = f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa.fai",
+        amb  = f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa.amb",
+        ann  = f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa.ann",
+        bwt  = f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa.bwt",
+        pac  = f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa.pac",
+        sa   = f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa.sa",
+    params:
+        out_dir = lambda wc: f"{D_FRAG}/ref/bwa/{wc.ref_name}",
+        fasta_target = lambda wc: f"{D_FRAG}/ref/bwa/{wc.ref_name}/{wc.ref_name}.fa",
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_bwa_index.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_bwa_index.tsv"
+    threads: 50
+    shell:
+        r"""
+        set -euo pipefail
+        exec &>> "{log.cmd}"
+        echo "[bwa index] $(date) ref_name={wildcards.ref_name} threads={threads}"
+
+        mkdir -p "{params.out_dir}"
+
+        if file -b "{input}" | grep -qi gzip; then
+            zcat "{input}" > "{params.fasta_target}"
+        else
+            cat "{input}" > "{params.fasta_target}"
+        fi
+
+        samtools faidx "{params.fasta_target}"
+
+        bwa index "{params.fasta_target}"
+        """
+#+end_src
+
+**** Align FASTQs
+#+begin_src snakemake
+rule frag_align:
+    message: "Fragmentomics alignment with BWA MEM",
+    conda: CONDA_FRAG,
+    input:
+        r1     = f"{D_FRAG}/fastqs/{{library_id}}.processed_R1.fastq.gz",
+        r2     = f"{D_FRAG}/fastqs/{{library_id}}.processed_R2.fastq.gz",
+        ref = lambda wc: f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa",
+    output:
+        bam = f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.coorsort.bam",
+    threads: 25
+    shell:
+        """
+        bwa mem -M -t {threads} \
+        {input.ref} {input.r1} {input.r2} \
+        | samtools view -@ 4 -Sb - -o - \
+        | samtools sort -@ 4 - -o {output.bam}
+        samtools index -@ 4 {output.bam}
+        """
+#+end_src
+
+** Testing
+*** Full pipeline CI test
+
+| r1_basename           | r2_basename           | library_id |
+|-----------------------+-----------------------+------------|
+| SRR3819937_1.fastq.gz | SRR3819937_2.fastq.gz | lib001     |
+| SRR3819938_1.fastq.gz | SRR3819938_2.fastq.gz | lib002     |
+| SRR3819939_1.fastq.gz | SRR3819939_2.fastq.gz | lib003     |
+| SRR3819940_1.fastq.gz | SRR3819940_2.fastq.gz | lib004     |
+
+#+begin_src yaml :tangle ./config/frag-conda-env.yaml
+name: frag
+
+channels:
+  - conda-forge
+  - bioconda
+
+dependencies:
+  - fastp
+  - fastqc
+  - bedtools
+  - samtools
+  - bwa
+#+end_src
+
+#+begin_src yaml :tangle ./config/test.yaml
+
+conda:
+  frag: "${HOME}/repos/frag/config/frag-conda-env.yaml"
+
+directories:
+  inputs: tests/full/inputs
+  frag: tests/full
+  logs: tests/logs
+  benchmark: tests/benchmark
+
+sample-tsv-path: ${HOME}/repos/frag/data/test-samples.tsv
+
+frag_ref_assemblies:
+  chr22:
+    url: https:/ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/seqs_for_alignment_pipelines.ucsc_ids/GCA_000001405.15_GRCh38_no_alt_plus_hs38d1_analysis_set.fna.gz
+    name: chr22
+    input: chr22-test.fa.gz
+
+#+end_src
+
+#+begin_src snakemake :tangle ./workflows/test.smk
+# ==============================================================================
+# CFDNA FRAGMENTOMICS FULL PIPELINE TEST WRAPPER SNAKEFILE
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+#
+# Comment
+#
+# ------------------------------------------------------------------------------
+
+# ------------------------------------------------------------------------------
+# Setup
+# ------------------------------------------------------------------------------
+
+# Load packages
+import os
+import pandas as pd
+
+# --------------------------------------------------------------------------------------
+# Load YAML Configuration
+# --------------------------------------------------------------------------------------
+
+configfile: "config/test.yaml"
+
+def resolve_config_paths(config_dict):
+    for k, v in config_dict.items():
+        if isinstance(v, str):
+            config_dict[k] = os.path.expandvars(os.path.expanduser(v))
+        elif isinstance(v, dict):
+            resolve_config_paths(v)
+        elif isinstance(v, list):
+            config_dict[k] = [os.path.expandvars(os.path.expanduser(i)) if isinstance(i, str) else i for i in v]
+
+resolve_config_paths(config)
+
+D_INPUTS = config["directories"]["inputs"]
+D_FRAG = config["directories"]["frag"]
+D_LOGS = config["directories"]["logs"]
+D_BENCHMARK = config["directories"]["benchmark"]
+
+CONDA_FRAG = config["conda"]["frag"]
+
+frag_ref_names = ["chr22"]
+
+# --------------------------------------------------------------------------------------
+# Load Tablular Configuration
+# --------------------------------------------------------------------------------------
+
+class SampleTable:
+    def __init__(self, tsv_path, selected_ids):
+        df = pd.read_csv(tsv_path, sep="\t")
+
+        missing = sorted(set(selected_ids) - set(df["library_id"]))
+        if missing:
+            raise ValueError(f"library_id values not found in TSV: {missing}")
+
+        df = df[df["library_id"].isin(selected_ids)].copy()
+        self.df = df
+
+    @property
+    def frag_library_ids(self):
+        return sorted(self.df["library_id"].unique())
+
+    @property
+    def r1_map(self):
+        # Map unmerged_library_id → R1 filename
+        return dict(zip(self.df["library_id"], self.df["r1_basename"]))
+
+    @property
+    def r2_map(self):
+        # Map unmerged_library_id → R1 filename
+        return dict(zip(self.df["library_id"], self.df["r2_basename"]))
+
+samples = SampleTable(
+    tsv_path=config["sample-tsv-path"],
+    selected_ids=["lib001","lib002"]
+)
+
+# ------------------------------------------------------------------------------
+# Wrapper Rules
+# ------------------------------------------------------------------------------
+
+# All rule
+
+rule all:
+    input:
+        # FASTQs
+        expand(f"{D_FRAG}/fastqs/{{library_id}}.{{processing}}_{{read}}.fastq.gz",
+               library_id = samples.frag_library_ids,
+               processing = ["raw","processed"],
+               read = ["R1", "R2"]),
+        #
+        # Alignments
+        #
+        # Index
+        expand(f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa.sa",
+               ref_name = frag_ref_names),
+        #
+        # Align
+        expand(f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.coorsort.bam",
+               library_id = samples.frag_library_ids,
+               ref_name = frag_ref_names),
+
+# Symlink input FASTQ files
+
+rule symlink_input_fastqs:
+    input:
+        r1 = lambda wc: f"{D_INPUTS}/{samples.r1_map[wc.library_id]}",
+        r2 = lambda wc: f"{D_INPUTS}/{samples.r2_map[wc.library_id]}",
+    output:
+        r1=f"{D_FRAG}/fastqs/{{library_id}}.raw_R1.fastq.gz",
+        r2=f"{D_FRAG}/fastqs/{{library_id}}.raw_R2.fastq.gz",
+    params:
+        out_dir=f"{D_FRAG}/fastqs",
+    shell:
+        r"""
+        mkdir -p "{params.out_dir}"
+        ln -sfr "{input.r1}" "{output.r1}"
+        ln -sfr "{input.r2}" "{output.r2}"
+        """
+
+# --------------------------------------------------------------------------------------
+# Snakemake Includes
+# --------------------------------------------------------------------------------------
+
+include: "frag.smk"
+
+#+end_src
+
 ** Development                                                          :dev:
 *** Count scale:smk_rule:
 - Snakemake

@@ -23,6 +23,8 @@ stratatotake = frag$gc_strata[which.max(frag$med_frag_fract)]
 fragsinmaxstrata = length(which(frag$gc_strata == stratatotake))
 fragstotake = round(fragsinmaxstrata/stratatotake)
 
-sampled = slice_sample(frag, n = nrow(frag), weight_by = med_frag_fract, replace = T) %>% select(chr, start, end, len, gc_strata)
+sampled = frag %>%
+  filter(!is.na(med_frag_fract)) %>%
+  slice_sample(., n = nrow(.), weight_by = med_frag_fract, replace = T) %>% select(chr, start, end, len, gc_strata)
 
 write.table(sampled, sep = "\t", col.names = F, row.names = F, quote = F, file = sampled_file)

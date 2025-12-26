@@ -1,0 +1,16 @@
+[bwa index] Fri Dec 19 11:25:48 AM CST 2025 ref_name=chr22 threads=50
+[bwa_index] Pack FASTA... 0.21 sec
+[bwa_index] Construct BWT for the packed sequence...
+[BWTIncCreate] textLength=101636936, availableWord=19151484
+[BWTIncConstructFromPacked] 10 iterations done. 31590664 characters processed.
+[BWTIncConstructFromPacked] 20 iterations done. 58359704 characters processed.
+[BWTIncConstructFromPacked] 30 iterations done. 82148056 characters processed.
+[BWTIncConstructFromPacked] 40 iterations done. 101636936 characters processed.
+[bwt_gen] Finished constructing BWT in 40 iterations.
+[bwa_index] 13.82 seconds elapse.
+[bwa_index] Update BWT... 0.17 sec
+[bwa_index] Pack forward-only FASTA... 0.16 sec
+[bwa_index] Construct SA from BWT and Occ... 6.84 sec
+[main] Version: 0.7.19-r1273
+[main] CMD: bwa index tests/full/ref/bwa/chr22/chr22.fa
+[main] Real time: 21.283 sec; CPU: 21.203 sec
