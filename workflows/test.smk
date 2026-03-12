@@ -3,22 +3,15 @@
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
-#
-# Comment
-#
-# ------------------------------------------------------------------------------
-
-# ------------------------------------------------------------------------------
 # Setup
 # ------------------------------------------------------------------------------
 
-# Load packages
 import os
 import pandas as pd
 
-# --------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 # Load YAML Configuration
-# --------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 
 configfile: "config/test.yaml"
 
@@ -33,18 +26,24 @@ def resolve_config_paths(config_dict):
 
 resolve_config_paths(config)
 
-D_INPUTS = config["directories"]["inputs"]
-D_FRAG = config["directories"]["frag"]
-D_LOGS = config["directories"]["logs"]
+# ------------------------------------------------------------------------------
+# Constants
+# ------------------------------------------------------------------------------
+
+D_INPUTS    = config["directories"]["inputs"]
+D_FRAG      = config["directories"]["frag"]
+D_LOGS      = config["directories"]["logs"]
 D_BENCHMARK = config["directories"]["benchmark"]
 
 CONDA_FRAG = config["conda"]["frag"]
 
 frag_ref_names = ["chr22"]
 
-# --------------------------------------------------------------------------------------
-# Load Tablular Configuration
-# --------------------------------------------------------------------------------------
+FRAG_HEALTHY_LIBRARIES = config.get("healthy_libraries", [])
+
+# ------------------------------------------------------------------------------
+# Load Tabular Configuration
+# ------------------------------------------------------------------------------
 
 class SampleTable:
     def __init__(self, tsv_path, selected_ids):
@@ -63,64 +62,134 @@ class SampleTable:
 
     @property
     def r1_map(self):
-        # Map unmerged_library_id → R1 filename
         return dict(zip(self.df["library_id"], self.df["r1_basename"]))
 
     @property
     def r2_map(self):
-        # Map unmerged_library_id → R1 filename
         return dict(zip(self.df["library_id"], self.df["r2_basename"]))
 
 samples = SampleTable(
     tsv_path=config["sample-tsv-path"],
-    selected_ids=["lib001","lib002"]
+    selected_ids=["lib001", "lib002"],
 )
 
-# ------------------------------------------------------------------------------
-# Wrapper Rules
-# ------------------------------------------------------------------------------
+FRAG_LIBRARY_IDS = samples.frag_library_ids
 
-# All rule
+# ------------------------------------------------------------------------------
+# Rule all
+# ------------------------------------------------------------------------------
 
 rule all:
     input:
-        # FASTQs
-        expand(f"{D_FRAG}/fastqs/{{library_id}}.{{processing}}_{{read}}.fastq.gz",
-               library_id = samples.frag_library_ids,
-               processing = ["raw","processed"],
-               read = ["R1", "R2"]),
-        #
+        # FASTQs (raw + processed)
+        expand(
+            f"{D_FRAG}/fastqs/{{library_id}}.{{processing}}_{{read}}.fastq.gz",
+            library_id=FRAG_LIBRARY_IDS,
+            processing=["raw", "processed"],
+            read=["R1", "R2"],
+        ),
+        # BWA index
+        expand(
+            f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa.sa",
+            ref_name=frag_ref_names,
+        ),
         # Alignments
-        #
-        # Index
-        expand(f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa.sa",
-               ref_name = frag_ref_names),
-        #
-        # Align
-        expand(f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.coorsort.bam",
-               library_id = samples.frag_library_ids,
-               ref_name = frag_ref_names),
+        expand(
+            f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.coorsort.bam",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=frag_ref_names,
+        ),
+        # GC-filtered bins
+        f"{D_FRAG}/ref/keep_5mb.bed",
+        # Filtered BAMs
+        expand(
+            f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.filt.bam",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=frag_ref_names,
+        ),
+        # Fragment BEDs
+        expand(
+            f"{D_FRAG}/frags/{{library_id}}.{{ref_name}}.frag.bed",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=frag_ref_names,
+        ),
+        # GC distributions
+        expand(
+            f"{D_FRAG}/frags/{{library_id}}.{{ref_name}}.gc_distro.csv",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=frag_ref_names,
+        ),
+        # Healthy GC summary
+        expand(
+            f"{D_FRAG}/frags/{{ref_name}}.healthy_med.rds",
+            ref_name=frag_ref_names,
+        ),
+        # Sampled fragment BEDs
+        expand(
+            f"{D_FRAG}/frags/{{library_id}}.{{ref_name}}.sampled_frag.bed",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=frag_ref_names,
+        ),
+        # Short/long BEDs
+        expand(
+            f"{D_FRAG}/frags/{{library_id}}.{{ref_name}}.norm_{{length}}.bed",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=frag_ref_names,
+            length=["short", "long"],
+        ),
+        # Fragment counts per bin
+        expand(
+            f"{D_FRAG}/counts/{{library_id}}.{{ref_name}}.cnt_{{length}}.tmp",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=frag_ref_names,
+            length=["short", "long"],
+        ),
+        # Merged counts
+        expand(
+            f"{D_FRAG}/frags/{{ref_name}}.frag_counts.tsv",
+            ref_name=frag_ref_names,
+        ),
+        # Ratios
+        expand(
+            f"{D_FRAG}/frags/{{ref_name}}.ratios.tsv",
+            ref_name=frag_ref_names,
+        ),
+        # End motifs per library
+        expand(
+            f"{D_FRAG}/motifs/{{library_id}}.{{ref_name}}.motifs.txt",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=frag_ref_names,
+        ),
+        # Motif matrix
+        expand(
+            f"{D_FRAG}/motifs/{{ref_name}}.all_motifs.tsv",
+            ref_name=frag_ref_names,
+        ),
 
-# Symlink input FASTQ files
+# ------------------------------------------------------------------------------
+# Symlink input FASTQs
+# ------------------------------------------------------------------------------
 
 rule symlink_input_fastqs:
+    message:
+        "Create symlinks for raw input FASTQs"
     input:
         r1 = lambda wc: f"{D_INPUTS}/{samples.r1_map[wc.library_id]}",
         r2 = lambda wc: f"{D_INPUTS}/{samples.r2_map[wc.library_id]}",
     output:
-        r1=f"{D_FRAG}/fastqs/{{library_id}}.raw_R1.fastq.gz",
-        r2=f"{D_FRAG}/fastqs/{{library_id}}.raw_R2.fastq.gz",
+        r1 = f"{D_FRAG}/fastqs/{{library_id}}.raw_R1.fastq.gz",
+        r2 = f"{D_FRAG}/fastqs/{{library_id}}.raw_R2.fastq.gz",
     params:
-        out_dir=f"{D_FRAG}/fastqs",
+        out_dir = f"{D_FRAG}/fastqs",
     shell:
-        r"""
+        """
         mkdir -p "{params.out_dir}"
         ln -sfr "{input.r1}" "{output.r1}"
         ln -sfr "{input.r2}" "{output.r2}"
         """
 
-# --------------------------------------------------------------------------------------
-# Snakemake Includes
-# --------------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Include module
+# ------------------------------------------------------------------------------
 
 include: "frag.smk"

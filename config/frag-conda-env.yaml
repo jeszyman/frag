@@ -5,8 +5,10 @@ channels:
   - bioconda
 
 dependencies:
+  - bedtools
+  - bwa
   - fastp
   - fastqc
-  - bedtools
+  - r-tidyverse
   - samtools
-  - bwa
+  - snakemake
