@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# ============================================================
+# AUTO-GENERATED — DO NOT EDIT DIRECTLY
+# Edits will be overwritten on next org-babel tangle.
+# 
+# Source:  /home/jeszyman/repos/frag/frag.org
+# Author:  Jeffrey Szymanski
+# Tangled: 2026-03-12 15:04:13
+# ============================================================
+
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
@@ -87,7 +96,7 @@ fetch_cfdna_reads() {
 fetch_chr22_ref_subset() {
   mkdir -p "$out_dir"
 
-  echo "[ref] chr22 subset → ${out_fa}"
+  echo "[ref] chr22 subset -> ${out_fa}"
   ( set +o pipefail
     wget -qO- "$ref_url" | zcat 2>/dev/null | head -n "$fa_head_lines" | gzip > "$out_fa"
   ) || true
@@ -98,7 +107,7 @@ fetch_chr22_ref_subset() {
 fetch_blacklist() {
   mkdir -p "$out_dir"
 
-  echo "[ref] hg38 blacklist → ${out_blk}"
+  echo "[ref] hg38 blacklist -> ${out_blk}"
   wget -qO "$out_blk" "$blk_url"
   [[ -s "$out_blk" ]] || { echo "ERR: failed to write ${out_blk}" >&2; exit 1; }
 }

@@ -192,164 +192,23 @@ git_update_repo() {
 main "$@"
 #+end_src
 
-*** Get in-repo test data
-- Get 60k reads per sample from SRA
-- Get small hg38 reference by taking top of chr22
-- Get broad blacklist regions and apply to our reference as bed files
-- Ensure gitignore does not push tests/full, but does retain tests/full/inputs/*
-#+begin_src bash :tangle ./tools/get_test_data.sh
-#!/usr/bin/env bash
-set -euo pipefail
-
-# -----------------------------------------------------------------------------
-# Script to collect and pre-process input data for a minimal working example
-# of the repo functionality. The input data will persist in the repo. This
-# script just documents how they were obtained. The other contents of
-# tests/full are NOT committed and are ignored by git.
-# -----------------------------------------------------------------------------
-
-parse_args() {
-    declare -g script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    declare -g repo_dir="$(cd "${script_dir}/.." && pwd)"
-    declare -g out_dir="${repo_dir}/tests/full/inputs"
-
-    declare -g blk_url="https://raw.githubusercontent.com/Boyle-Lab/Blacklist/master/lists/hg38-blacklist.v2.bed.gz"
-    declare -g ref_url="https://hgdownload.soe.ucsc.edu/goldenPath/hg38/chromosomes/chr22.fa.gz"
-
-
-    declare -g fa_head_lines=4000000
-    declare -g nreads=60000
-
-    declare -g keep_bed="${out_dir}/chr22.keep.bed"
-    declare -g out_blk="${out_dir}/hg38-blacklist.v2.bed.gz"
-    declare -g out_fa="${out_dir}/chr22-test.fa.gz"
-    declare -g excl_bed="${out_dir}/chr22.exclude.blacklist.bed.gz"
-
-    declare -g RUNS=( SRR3819940 SRR3819939 SRR3819938 SRR3819937 )
-
-}
-
-main(){
-    parse_args "$@"
-    clean_inputs_dir
-    ensure_gitignore
-    for acc in "${RUNS[@]}"; do
-	fetch_cfdna_reads
-    done
-    fetch_chr22_ref_subset
-    fetch_blacklist
-    make_exclude_keep_beds
-}
-
-clean_inputs_dir() {
-  if [[ -d "$out_dir" ]]; then
-    echo "[clean] removing ${out_dir}"
-    rm -rf "$out_dir"
-  fi
-  mkdir -p "$out_dir"
-}
-
-ensure_gitignore() {
-  gi="${repo_dir}/.gitignore"
-
-  req1='tests/full/*'
-  req2='!tests/full/inputs/'
-  req3='!tests/full/inputs/**'
-
-  touch "$gi"
-
-  have1=0; have2=0; have3=0
-  grep -Fxq "$req1" "$gi" && have1=1 || true
-  grep -Fxq "$req2" "$gi" && have2=1 || true
-  grep -Fxq "$req3" "$gi" && have3=1 || true
-
-  if (( ! have1 || ! have2 || ! have3 )); then
-    {
-      echo ''
-      echo '# --- test data (auto-managed by get_test_data.sh) ---'
-      (( have1 )) || echo "$req1"
-      (( have2 )) || echo "$req2"
-      (( have3 )) || echo "$req3"
-    } >> "$gi"
-    echo "[gitignore] ensured tests/full ignores with inputs preserved"
-  fi
-}
-
-fetch_cfdna_reads() {
-  mkdir -p "$out_dir"
-
-  ( cd "$out_dir" && fastq-dump --split-files --gzip -X "$nreads" "$acc" )
-
-  echo "R1 reads: $(zcat "${out_dir}/${acc}_1.fastq.gz" | wc -l | awk '{print $1/4}')"
-  echo "R2 reads: $(zcat "${out_dir}/${acc}_2.fastq.gz" | wc -l | awk '{print $1/4}')"
-}
-
-fetch_chr22_ref_subset() {
-  mkdir -p "$out_dir"
-
-  echo "[ref] chr22 subset -> ${out_fa}"
-  ( set +o pipefail
-    wget -qO- "$ref_url" | zcat 2>/dev/null | head -n "$fa_head_lines" | gzip > "$out_fa"
-  ) || true
-
-  test -s "$out_fa"
-}
-
-fetch_blacklist() {
-  mkdir -p "$out_dir"
-
-  echo "[ref] hg38 blacklist -> ${out_blk}"
-  wget -qO "$out_blk" "$blk_url"
-  [[ -s "$out_blk" ]] || { echo "ERR: failed to write ${out_blk}" >&2; exit 1; }
-}
-
-make_exclude_keep_beds() {
-  mkdir -p "$out_dir"
-
-  echo "[beds] building keep/exclude from ${out_fa}"
-
-  fa_ungz="${out_dir}/chr22.test.fa"
-  zcat "$out_fa" > "$fa_ungz"
-  test -s "$fa_ungz"
-
-  samtools faidx "$fa_ungz"
-  test -s "${fa_ungz}.fai"
-
-  # KEEP: spans for all contigs present in the .fai (chr22-only here)
-  awk 'BEGIN{OFS="\t"} {print $1,0,$2}' "${fa_ungz}.fai" \
-    | sort -k1,1 -k2,2n > "$keep_bed"
-  test -s "$keep_bed"
-
-  # EXCLUDE: clip blacklist to contigs present in .fai and bgzip
-  awk 'NR==FNR{ok[$1]=1; next} ok[$1]' <(cut -f1 "${fa_ungz}.fai") <(zcat "$out_blk") \
-    | sort -k1,1 -k2,2n | bgzip -c > "$excl_bed"
-  test -s "$excl_bed"
-
-  tabix -p bed "$excl_bed" || true
-
-  rm -f "$fa_ungz" "${fa_ungz}.fai"
-
-  echo "[beds] keep=${keep_bed}  exclude=${excl_bed}"
-}
-
-main "$@"
-
-#+end_src
-
 *** README
 :PROPERTIES:
 :ID:       339b69f6-6c09-4e9d-a2ec-27bdf5747163
 :END:
 **** Change Log
 - Development since last tag
+  - [2026-03-12 Thu] Fixed pipeline: gc_map_bins (windowing+GC), count_merge (filename parsing), conda env (removed name:), documented test data provenance (WGS cfDNA, PRJNA326698)
   - [2026-03-12 Wed] Restructured to biopipe module pattern
   - [2025-12-17 Wed] Added test data set
 
 ** Conda environments
 *** Frag
-#+begin_src yaml :tangle ./config/frag-conda-env.yaml
-name: frag
+:PROPERTIES:
+:header-args:yaml: :tangle ./config/frag-conda-env.yaml :comments no
+:END:
 
+#+begin_src yaml
 channels:
   - conda-forge
   - bioconda
@@ -628,8 +487,9 @@ rule frag_gc_map_bins:
     conda:
         CONDA_FRAG
     input:
-        gc5mb  = config["gc5mb"],
+        regions = config["gc5mb"],
         blklist = config["blklist"],
+        fasta   = expand(f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa", ref_name=frag_ref_names)[0],
     log:
         cmd = f"{D_LOGS}/frag_gc_map_bins.log",
     benchmark:
@@ -643,25 +503,42 @@ rule frag_gc_map_bins:
         exec &>> "{log.cmd}"
         echo "[gc_map_bins] $(date)"
 
-        bash scripts/make_gc_map_bind.sh \
-          "{input.gc5mb}" "{input.blklist}" "{output.keep}"
+        bash scripts/make_gc_map_bins.sh \
+          "{input.regions}" "{input.fasta}" "{input.blklist}" "{output.keep}"
         """
 #+end_src
 
-#+begin_src bash :tangle ./scripts/make_gc_map_bind.sh
+#+begin_src bash :tangle ./scripts/make_gc_map_bins.sh
 #!/usr/bin/env bash
 set -euo pipefail
 
-# make_gc_map_bind.sh
-# Filter 5Mb GC bins by blacklist and minimum GC content.
-# Usage: make_gc_map_bind.sh <gc5mb.bed> <blacklist.bed> <output_keep.bed>
+# make_gc_map_bins.sh
+# Create 5Mb genomic windows, compute GC content, filter by blacklist and GC.
+# Usage: make_gc_map_bins.sh <regions.bed> <ref.fa> <blacklist.bed.gz> <output_keep.bed>
 
-gc5mb="$1"
-blklist="$2"
-keep="$3"
+regions="$1"
+fasta="$2"
+blklist="$3"
+keep="$4"
 
-bedtools intersect -a "$gc5mb" -b "$blklist" -v -wa \
-  | grep -v _ \
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+# Create genome file from FASTA index
+samtools faidx "$fasta" 2>/dev/null || true
+awk 'BEGIN{OFS="\t"} {print $1,$2}' "${fasta}.fai" > "$tmpdir/genome.txt"
+
+# Window into 5Mb bins
+bedtools makewindows -b "$regions" -w 5000000 > "$tmpdir/windows.bed"
+
+# Compute GC content per window (column 5 = %GC in bedtools nuc output)
+bedtools nuc -fi "$fasta" -bed "$tmpdir/windows.bed" \
+  | tail -n +2 \
+  | awk 'BEGIN{OFS="\t"} {print $1,$2,$3,$5}' > "$tmpdir/gc_windows.bed"
+
+# Remove blacklist-overlapping bins, alt contigs, and low-GC bins
+bedtools intersect -a "$tmpdir/gc_windows.bed" -b "$blklist" -v -wa \
+  | grep -v '_' \
   | awk '{ if ($4 >= 0.3) print $0 }' > "$keep"
 #+end_src
 
@@ -964,22 +841,22 @@ set -euo pipefail
 
 # count_merge.sh
 # Merge fragment count files into a single TSV.
+# Expects filenames: {library_id}.{ref_name}.cnt_{length}.tmp
 # Usage: count_merge.sh <counts_dir> <output.tsv>
 
 counts_dir="${1}"
 out_tsv="${2}"
 
-if [ -f "$out_tsv" ]; then rm "$out_tsv"; fi
+echo -e "library\tlen_class\tchr\tstart\tend\tgc\tcount" > "$out_tsv"
 
-for file in "${counts_dir}"/*; do
-    awk '{{print FILENAME (NF?"\t":"") $0}}' "$file" |
-        sed 's/^.*lib/lib/g' |
-        sed 's/_.*_/\t/g' |
-        sed 's/.tmp//g' |
-        sed 's/\.bed//g' >> "$out_tsv"
+for file in "${counts_dir}"/*.tmp; do
+    base=$(basename "$file" .tmp)
+    # Parse library_id and len_class from filename: lib001.chr22.cnt_short
+    library_id="${base%%.*}"
+    len_class="${base##*.cnt_}"
+    awk -v lib="$library_id" -v lc="$len_class" \
+        'BEGIN{OFS="\t"} {print lib, lc, $0}' "$file" >> "$out_tsv"
 done
-
-sed -i '1 i\library\tlen_class\tchr\tstart\tend\tgc\tcount' "$out_tsv"
 #+end_src
 
 **** Ratio normalization
@@ -1199,31 +1076,164 @@ write_tsv(motifs, motif_tsv)
 #+end_src
 
 ** Testing
-*** Full pipeline CI test
+*** Test data provenance
+Test data is paired-end WGS (whole-genome sequencing) of cell-free DNA, not EM-seq or bisulfite-seq. Samples are from [[https://www.ncbi.nlm.nih.gov/bioproject/PRJNA326698][PRJNA326698]] (Snyder et al. 2016, /Cell/), downloaded from NCBI SRA.
 
-| r1_basename           | r2_basename           | library_id |
-|-----------------------+-----------------------+------------|
-| SRR3819937_1.fastq.gz | SRR3819937_2.fastq.gz | lib001     |
-| SRR3819938_1.fastq.gz | SRR3819938_2.fastq.gz | lib002     |
-| SRR3819939_1.fastq.gz | SRR3819939_2.fastq.gz | lib003     |
-| SRR3819940_1.fastq.gz | SRR3819940_2.fastq.gz | lib004     |
+- 60,000 read pairs per sample (subsampled via =fastq-dump -X 60000=)
+- Reference: first 4M lines of UCSC hg38 chr22 FASTA (~12 MB subset)
+- Blacklist: [[https://github.com/Boyle-Lab/Blacklist][Boyle Lab hg38-blacklist.v2]], clipped to chr22 contigs
+- Committed inputs (~35 MB) live in =tests/full/inputs/=; all other =tests/full/= contents are git-ignored
 
-*** Conda environment
-#+begin_src yaml :tangle ./config/frag-conda-env.yaml
-name: frag
+| SRA accession | library_id | cohort  |
+|---------------+------------+---------|
+| SRR3819937    | lib001     | healthy |
+| SRR3819938    | lib002     | healthy |
+| SRR3819939    | lib003     | cancer  |
+| SRR3819940    | lib004     | cancer  |
 
-channels:
-  - conda-forge
-  - bioconda
+*** Get test data
+- Get 60k reads per sample from SRA
+- Get small hg38 reference by taking top of chr22
+- Get broad blacklist regions and apply to our reference as bed files
+- Ensure gitignore does not push tests/full, but does retain tests/full/inputs/*
 
-dependencies:
-  - bedtools
-  - bwa
-  - fastp
-  - fastqc
-  - r-tidyverse
-  - samtools
-  - snakemake
+#+begin_src bash :tangle ./tools/get_test_data.sh
+#!/usr/bin/env bash
+set -euo pipefail
+
+# -----------------------------------------------------------------------------
+# Script to collect and pre-process input data for a minimal working example
+# of the repo functionality. The input data will persist in the repo. This
+# script just documents how they were obtained. The other contents of
+# tests/full are NOT committed and are ignored by git.
+# -----------------------------------------------------------------------------
+
+parse_args() {
+    declare -g script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    declare -g repo_dir="$(cd "${script_dir}/.." && pwd)"
+    declare -g out_dir="${repo_dir}/tests/full/inputs"
+
+    declare -g blk_url="https://raw.githubusercontent.com/Boyle-Lab/Blacklist/master/lists/hg38-blacklist.v2.bed.gz"
+    declare -g ref_url="https://hgdownload.soe.ucsc.edu/goldenPath/hg38/chromosomes/chr22.fa.gz"
+
+
+    declare -g fa_head_lines=4000000
+    declare -g nreads=60000
+
+    declare -g keep_bed="${out_dir}/chr22.keep.bed"
+    declare -g out_blk="${out_dir}/hg38-blacklist.v2.bed.gz"
+    declare -g out_fa="${out_dir}/chr22-test.fa.gz"
+    declare -g excl_bed="${out_dir}/chr22.exclude.blacklist.bed.gz"
+
+    declare -g RUNS=( SRR3819940 SRR3819939 SRR3819938 SRR3819937 )
+
+}
+
+main(){
+    parse_args "$@"
+    clean_inputs_dir
+    ensure_gitignore
+    for acc in "${RUNS[@]}"; do
+	fetch_cfdna_reads
+    done
+    fetch_chr22_ref_subset
+    fetch_blacklist
+    make_exclude_keep_beds
+}
+
+clean_inputs_dir() {
+  if [[ -d "$out_dir" ]]; then
+    echo "[clean] removing ${out_dir}"
+    rm -rf "$out_dir"
+  fi
+  mkdir -p "$out_dir"
+}
+
+ensure_gitignore() {
+  gi="${repo_dir}/.gitignore"
+
+  req1='tests/full/*'
+  req2='!tests/full/inputs/'
+  req3='!tests/full/inputs/**'
+
+  touch "$gi"
+
+  have1=0; have2=0; have3=0
+  grep -Fxq "$req1" "$gi" && have1=1 || true
+  grep -Fxq "$req2" "$gi" && have2=1 || true
+  grep -Fxq "$req3" "$gi" && have3=1 || true
+
+  if (( ! have1 || ! have2 || ! have3 )); then
+    {
+      echo ''
+      echo '# --- test data (auto-managed by get_test_data.sh) ---'
+      (( have1 )) || echo "$req1"
+      (( have2 )) || echo "$req2"
+      (( have3 )) || echo "$req3"
+    } >> "$gi"
+    echo "[gitignore] ensured tests/full ignores with inputs preserved"
+  fi
+}
+
+fetch_cfdna_reads() {
+  mkdir -p "$out_dir"
+
+  ( cd "$out_dir" && fastq-dump --split-files --gzip -X "$nreads" "$acc" )
+
+  echo "R1 reads: $(zcat "${out_dir}/${acc}_1.fastq.gz" | wc -l | awk '{print $1/4}')"
+  echo "R2 reads: $(zcat "${out_dir}/${acc}_2.fastq.gz" | wc -l | awk '{print $1/4}')"
+}
+
+fetch_chr22_ref_subset() {
+  mkdir -p "$out_dir"
+
+  echo "[ref] chr22 subset -> ${out_fa}"
+  ( set +o pipefail
+    wget -qO- "$ref_url" | zcat 2>/dev/null | head -n "$fa_head_lines" | gzip > "$out_fa"
+  ) || true
+
+  test -s "$out_fa"
+}
+
+fetch_blacklist() {
+  mkdir -p "$out_dir"
+
+  echo "[ref] hg38 blacklist -> ${out_blk}"
+  wget -qO "$out_blk" "$blk_url"
+  [[ -s "$out_blk" ]] || { echo "ERR: failed to write ${out_blk}" >&2; exit 1; }
+}
+
+make_exclude_keep_beds() {
+  mkdir -p "$out_dir"
+
+  echo "[beds] building keep/exclude from ${out_fa}"
+
+  fa_ungz="${out_dir}/chr22.test.fa"
+  zcat "$out_fa" > "$fa_ungz"
+  test -s "$fa_ungz"
+
+  samtools faidx "$fa_ungz"
+  test -s "${fa_ungz}.fai"
+
+  # KEEP: spans for all contigs present in the .fai (chr22-only here)
+  awk 'BEGIN{OFS="\t"} {print $1,0,$2}' "${fa_ungz}.fai" \
+    | sort -k1,1 -k2,2n > "$keep_bed"
+  test -s "$keep_bed"
+
+  # EXCLUDE: clip blacklist to contigs present in .fai and bgzip
+  awk 'NR==FNR{ok[$1]=1; next} ok[$1]' <(cut -f1 "${fa_ungz}.fai") <(zcat "$out_blk") \
+    | sort -k1,1 -k2,2n | bgzip -c > "$excl_bed"
+  test -s "$excl_bed"
+
+  tabix -p bed "$excl_bed" || true
+
+  rm -f "$fa_ungz" "${fa_ungz}.fai"
+
+  echo "[beds] keep=${keep_bed}  exclude=${excl_bed}"
+}
+
+main "$@"
+
 #+end_src
 
 *** Test configuration
@@ -1461,6 +1471,7 @@ include: "frag.smk"
 #+end_src
 
 ** Development                                                          :dev:
+*** TODO Integrate [[https://github.com/alexcpan/nf1_fragmentomics][nf1_fragmentomics]]
 *** Ideas
 - multimappers in bedtools would need a CIGAR filt (no flag) https://www.biostars.org/p/239772/
 - make hg38 gc filter https://stackoverflow.com/questions/8551349/how-to-sum-up-every-10-lines-and-calculate-average-using-awk

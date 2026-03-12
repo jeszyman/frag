@@ -7,7 +7,7 @@ dir:
   repo:
     cfdna_wgs: "/home/jeszyman/repos/cfdna-frag"
   scripts:
-    cfdna_wgs: "workflow/scripts"
+    cfdna_wgs: "scripts"
 
 files:
   cfdna_wgs_frag_keep_bed: "test/inputs/keep.bed"

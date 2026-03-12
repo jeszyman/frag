@@ -1,21 +1,30 @@
 #!/usr/bin/env bash
+# ============================================================
+# AUTO-GENERATED — DO NOT EDIT DIRECTLY
+# Edits will be overwritten on next org-babel tangle.
+# 
+# Source:  /home/jeszyman/repos/frag/frag.org
+# Author:  Jeffrey Szymanski
+# Tangled: 2026-03-12 15:04:13
+# ============================================================
+
 set -euo pipefail
 
 # count_merge.sh
 # Merge fragment count files into a single TSV.
+# Expects filenames: {library_id}.{ref_name}.cnt_{length}.tmp
 # Usage: count_merge.sh <counts_dir> <output.tsv>
 
 counts_dir="${1}"
 out_tsv="${2}"
 
-if [ -f "$out_tsv" ]; then rm "$out_tsv"; fi
+echo -e "library\tlen_class\tchr\tstart\tend\tgc\tcount" > "$out_tsv"
 
-for file in "${counts_dir}"/*; do
-    awk '{{print FILENAME (NF?"\t":"") $0}}' "$file" |
-        sed 's/^.*lib/lib/g' |
-        sed 's/_.*_/\t/g' |
-        sed 's/.tmp//g' |
-        sed 's/\.bed//g' >> "$out_tsv"
+for file in "${counts_dir}"/*.tmp; do
+    base=$(basename "$file" .tmp)
+    # Parse library_id and len_class from filename: lib001.chr22.cnt_short
+    library_id="${base%%.*}"
+    len_class="${base##*.cnt_}"
+    awk -v lib="$library_id" -v lc="$len_class" \
+        'BEGIN{OFS="\t"} {print lib, lc, $0}' "$file" >> "$out_tsv"
 done
-
-sed -i '1 i\library\tlen_class\tchr\tstart\tend\tgc\tcount' "$out_tsv"

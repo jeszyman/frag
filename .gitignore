@@ -5,6 +5,10 @@
 **/.cache
 **/.config
 **/.java
+# Pipeline outputs
+tests/benchmark/
+tests/logs/
+
 # --- test data (auto-managed by get_test_data.sh) ---
 tests/full/*
 !tests/full/inputs/

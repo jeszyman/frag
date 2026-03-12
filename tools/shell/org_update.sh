@@ -1,20 +1,13 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# ============================================================
+# AUTO-GENERATED — DO NOT EDIT DIRECTLY
+# Edits will be overwritten on next org-babel tangle.
+# 
+# Source:  /home/jeszyman/repos/frag/frag.org
+# Author:  Jeffrey Szymanski
+# Tangled: 2026-03-12 15:04:13
+# ============================================================
 
-# -----------------------------------------------------------------------------
-# org_update.sh
-#
-# Orchestrate a small repo maintenance workflow:
-#   1) Save open Emacs buffers via emacsclient (if a server is available)
-#   2) Tangle selected repo Org files
-#   3) Export a README.md from a specific Org node (via a Python helper)
-#   4) Save buffers again (best-effort)
-#   5) Run a git update workflow in each repo (via basecamp_functions.sh)
-#
-# Diagnostics are written to stderr. Stdout is reserved for primary outputs.
-# -----------------------------------------------------------------------------
-
-# =============================================================================
 # SECTION: CONFIGURATION
 # =============================================================================
 

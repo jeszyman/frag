@@ -1,3 +1,12 @@
+# ============================================================
+# AUTO-GENERATED — DO NOT EDIT DIRECTLY
+# Edits will be overwritten on next org-babel tangle.
+# 
+# Source:  /home/jeszyman/repos/frag/frag.org
+# Author:  Jeffrey Szymanski
+# Tangled: 2026-03-12 15:04:13
+# ============================================================
+
 #########1#########2#########3#########4#########5#########6#########7#########8
 #
 # This is a modular snakefile, intended to be incorporated into a larger
@@ -5,7 +14,6 @@
 # https://snakemake.readthedocs.io/en/stable/snakefiles/modularization.html)
 #
 #########1#########2#########3#########4#########5#########6#########7#########8
-
 rule frag_fastp:
     message:
         "Fragmentomics fastp FASTQ processing"
@@ -43,7 +51,6 @@ rule frag_fastp:
           --thread {threads} \
           {params.extra}
         """
-
 rule frag_bwa_index:
     message:
         "Index reference FASTA for BWA alignment"
@@ -86,7 +93,6 @@ rule frag_bwa_index:
 
         bwa index "{params.fasta_target}"
         """
-
 rule frag_align:
     message:
         "Fragmentomics alignment with BWA MEM and streaming markdup"
@@ -114,7 +120,6 @@ rule frag_align:
           "{input.ref}" "{input.r1}" "{input.r2}" \
           "{output.bam}" {threads}
         """
-
 rule frag_filter_alignments:
     message:
         "Filter alignments by MAPQ and genomic region"
@@ -139,7 +144,6 @@ rule frag_filter_alignments:
         bash scripts/filter_alignments.sh \
           "{input.bam}" "{input.keep_bed}" {threads} "{output.bam}"
         """
-
 rule frag_bam_to_frag_bed:
     message:
         "Convert filtered BAM to fragment BED with GC and length annotations"
@@ -164,15 +168,15 @@ rule frag_bam_to_frag_bed:
         bash scripts/bam_to_frag_bed.sh \
           "{input.bam}" "{input.fasta}" "{output.bed}"
         """
-
 rule frag_gc_map_bins:
     message:
         "Create GC and mappability restricted 5Mb bins"
     conda:
         CONDA_FRAG
     input:
-        gc5mb  = config["gc5mb"],
+        regions = config["gc5mb"],
         blklist = config["blklist"],
+        fasta   = expand(f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa", ref_name=frag_ref_names)[0],
     log:
         cmd = f"{D_LOGS}/frag_gc_map_bins.log",
     benchmark:
@@ -186,10 +190,9 @@ rule frag_gc_map_bins:
         exec &>> "{log.cmd}"
         echo "[gc_map_bins] $(date)"
 
-        bash scripts/make_gc_map_bind.sh \
-          "{input.gc5mb}" "{input.blklist}" "{output.keep}"
+        bash scripts/make_gc_map_bins.sh \
+          "{input.regions}" "{input.fasta}" "{input.blklist}" "{output.keep}"
         """
-
 rule frag_gc_distro:
     message:
         "Compute per-library GC distribution from fragment BED"
@@ -213,7 +216,6 @@ rule frag_gc_distro:
         Rscript scripts/gc_distro.R \
           "{input.bed}" "{output.csv}"
         """
-
 rule frag_healthy_gc:
     message:
         "Compute median GC distribution from healthy libraries"
@@ -241,7 +243,6 @@ rule frag_healthy_gc:
         Rscript scripts/make_healthy_gc_summary.R \
           "{input.csvs}" "{output.rds}"
         """
-
 rule frag_gc_sample:
     message:
         "Resample fragments by healthy GC proportions"
@@ -266,7 +267,6 @@ rule frag_gc_sample:
         Rscript scripts/sample_frags_by_gc.R \
           "{input.healthy_med}" "{input.frag_bed}" "{output.bed}"
         """
-
 rule frag_window_sum:
     message:
         "Partition fragments into short (100-150bp) and long (151-220bp) groups"
@@ -291,7 +291,6 @@ rule frag_window_sum:
         bash scripts/frag_window_sum.sh \
           "{input.bed}" "{output.short}" "{output.long}"
         """
-
 rule frag_window_count:
     message:
         "Count short and long fragments per 5Mb genomic bin"
@@ -320,7 +319,6 @@ rule frag_window_count:
         bash scripts/frag_window_int.sh \
           "{input.long}" "{input.matbed}" "{output.long}"
         """
-
 rule frag_count_merge:
     message:
         "Merge short and long fragment counts across libraries"
@@ -351,7 +349,6 @@ rule frag_count_merge:
         bash scripts/count_merge.sh \
           "{params.counts_dir}" "{output.tsv}"
         """
-
 rule frag_ratio_normalize:
     message:
         "Compute zero-centered fragment length ratios per library"
@@ -375,7 +372,6 @@ rule frag_ratio_normalize:
         Rscript scripts/make_ratios.R \
           "{input.tsv}" "{output.tsv}"
         """
-
 rule frag_sample_motifs:
     message:
         "Sample 5-prime end motifs from filtered BAM"
@@ -406,7 +402,6 @@ rule frag_sample_motifs:
           {params.n_motif} {params.n_reads} {params.seed} {threads} \
           "{output.txt}"
         """
-
 rule frag_motif_matrix:
     message:
         "Build motif frequency matrix across libraries"
