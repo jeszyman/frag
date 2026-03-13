@@ -4,7 +4,7 @@
 # 
 # Source:  /home/jeszyman/repos/frag/frag.org
 # Author:  Jeffrey Szymanski
-# Tangled: 2026-03-12 15:04:13
+# Tangled: 2026-03-13 15:30:47
 # ============================================================
 
 #########1#########2#########3#########4#########5#########6#########7#########8
@@ -428,4 +428,189 @@ rule frag_motif_matrix:
 
         Rscript scripts/end_motif_mat.R \
           "{input.txts}" "{output.tsv}"
+        """
+rule frag_length_hist:
+    message:
+        "Compute fragment length histogram from frag BED"
+    conda:
+        CONDA_FRAG
+    input:
+        bed = f"{D_FRAG}/frags/{{library_id}}.{{ref_name}}.frag.bed",
+    log:
+        cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_length_hist.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_length_hist.tsv"
+    params:
+        start_bp = config.get("length_hist", {}).get("start", 30),
+        end_bp   = config.get("length_hist", {}).get("end", 700),
+    threads:
+        1
+    output:
+        tsv = f"{D_FRAG}/histograms/{{library_id}}.{{ref_name}}.length_hist.tsv",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[length_hist] $(date) lib={wildcards.library_id} ref={wildcards.ref_name}"
+
+        mkdir -p "$(dirname {output.tsv})"
+        Rscript scripts/frag_length_hist.R \
+          "{input.bed}" "{output.tsv}" {params.start_bp} {params.end_bp}
+        """
+rule frag_length_freq_matrix:
+    message:
+        "Aggregate fragment length histograms into frequency matrix"
+    conda:
+        CONDA_FRAG
+    input:
+        hists = lambda wc: expand(
+            f"{D_FRAG}/histograms/{{library_id}}.{{ref_name}}.length_hist.tsv",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=wc.ref_name,
+        ),
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_length_freq_matrix.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_frag_length_freq_matrix.tsv"
+    threads:
+        1
+    output:
+        counts = f"{D_FRAG}/histograms/{{ref_name}}.count_histogram.csv",
+        freqs  = f"{D_FRAG}/histograms/{{ref_name}}.freq_histogram.csv",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[freq_matrix] $(date) ref={wildcards.ref_name}"
+
+        mkdir -p "$(dirname {output.counts})"
+        Rscript scripts/frag_length_freq_matrix.R \
+          "{input.hists}" "{output.counts}" "{output.freqs}"
+        """
+rule frag_arm_zscores:
+    message:
+        "Compute DELFI arm-level z-scores (Mathios method)"
+    conda:
+        CONDA_FRAG
+    input:
+        counts   = f"{D_FRAG}/frags/{{ref_name}}.frag_counts.tsv",
+        cytoband = config["cytoband"],
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_arm_zscores.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_frag_arm_zscores.tsv"
+    params:
+        healthy_libs = " ".join(FRAG_HEALTHY_LIBRARIES),
+    threads:
+        1
+    output:
+        csv = f"{D_FRAG}/features/{{ref_name}}.arm_zscores.csv",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[arm_zscores] $(date) ref={wildcards.ref_name}"
+
+        mkdir -p "$(dirname {output.csv})"
+
+        healthy_file=$(mktemp)
+        for lib in {params.healthy_libs}; do echo "$lib" >> "$healthy_file"; done
+
+        Rscript scripts/delfi_arm_zscores.R \
+          "{input.counts}" "{input.cytoband}" "$healthy_file" "{output.csv}"
+
+        rm -f "$healthy_file"
+        """
+rule frag_ratio_row_normalize:
+    message:
+        "Row-normalize DELFI ratios (z-score per library)"
+    conda:
+        CONDA_FRAG
+    input:
+        tsv = f"{D_FRAG}/frags/{{ref_name}}.ratios.tsv",
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_ratio_row_normalize.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_frag_ratio_row_normalize.tsv"
+    threads:
+        1
+    output:
+        csv = f"{D_FRAG}/features/{{ref_name}}.ratios_normalized.csv",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[ratio_row_norm] $(date) ref={wildcards.ref_name}"
+
+        mkdir -p "$(dirname {output.csv})"
+        Rscript scripts/ratio_row_normalize.R \
+          "{input.tsv}" "{output.csv}"
+        """
+rule frag_plot_length_overlay:
+    message:
+        "Plot fragment length distribution overlay"
+    conda:
+        CONDA_FRAG
+    input:
+        freq = f"{D_FRAG}/histograms/{{ref_name}}.freq_histogram.csv",
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_plot_length_overlay.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_frag_plot_length_overlay.tsv"
+    threads:
+        1
+    output:
+        pdf = f"{D_FRAG}/qc/{{ref_name}}.frag_length_overlay.pdf",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[plot_length_overlay] $(date) ref={wildcards.ref_name}"
+
+        mkdir -p "$(dirname {output.pdf})"
+        Rscript scripts/plot_frag_length_overlay.R \
+          "{input.freq}" "{output.pdf}"
+        """
+rule frag_plot_ratio_profile:
+    message:
+        "Plot genome-wide DELFI ratio profile"
+    conda:
+        CONDA_FRAG
+    input:
+        tsv = f"{D_FRAG}/frags/{{ref_name}}.ratios.tsv",
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_plot_ratio_profile.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_frag_plot_ratio_profile.tsv"
+    threads:
+        1
+    output:
+        pdf = f"{D_FRAG}/qc/{{ref_name}}.ratio_profile.pdf",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[plot_ratio_profile] $(date) ref={wildcards.ref_name}"
+
+        mkdir -p "$(dirname {output.pdf})"
+        Rscript scripts/plot_ratio_profile.R \
+          "{input.tsv}" "{output.pdf}"
+        """
+rule frag_plot_arm_zscore_heatmap:
+    message:
+        "Plot arm z-score heatmap"
+    conda:
+        CONDA_FRAG
+    input:
+        csv = f"{D_FRAG}/features/{{ref_name}}.arm_zscores.csv",
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_plot_arm_zscore_heatmap.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_frag_plot_arm_zscore_heatmap.tsv"
+    threads:
+        1
+    output:
+        pdf = f"{D_FRAG}/qc/{{ref_name}}.arm_zscore_heatmap.pdf",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[plot_arm_zscore_heatmap] $(date) ref={wildcards.ref_name}"
+
+        mkdir -p "$(dirname {output.pdf})"
+        Rscript scripts/plot_arm_zscore_heatmap.R \
+          "{input.csv}" "{output.pdf}"
         """

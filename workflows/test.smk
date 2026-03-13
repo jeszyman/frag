@@ -4,7 +4,7 @@
 # 
 # Source:  /home/jeszyman/repos/frag/frag.org
 # Author:  Jeffrey Szymanski
-# Tangled: 2026-03-12 15:04:13
+# Tangled: 2026-03-13 15:30:47
 # ============================================================
 
 # CFDNA FRAGMENTOMICS FULL PIPELINE TEST WRAPPER SNAKEFILE
@@ -171,6 +171,44 @@ rule all:
         # Motif matrix
         expand(
             f"{D_FRAG}/motifs/{{ref_name}}.all_motifs.tsv",
+            ref_name=frag_ref_names,
+        ),
+        # Fragment length histograms
+        expand(
+            f"{D_FRAG}/histograms/{{library_id}}.{{ref_name}}.length_hist.tsv",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=frag_ref_names,
+        ),
+        # Frequency matrix
+        expand(
+            f"{D_FRAG}/histograms/{{ref_name}}.count_histogram.csv",
+            ref_name=frag_ref_names,
+        ),
+        expand(
+            f"{D_FRAG}/histograms/{{ref_name}}.freq_histogram.csv",
+            ref_name=frag_ref_names,
+        ),
+        # Arm z-scores
+        expand(
+            f"{D_FRAG}/features/{{ref_name}}.arm_zscores.csv",
+            ref_name=frag_ref_names,
+        ),
+        # Normalized ratios
+        expand(
+            f"{D_FRAG}/features/{{ref_name}}.ratios_normalized.csv",
+            ref_name=frag_ref_names,
+        ),
+        # QC plots
+        expand(
+            f"{D_FRAG}/qc/{{ref_name}}.frag_length_overlay.pdf",
+            ref_name=frag_ref_names,
+        ),
+        expand(
+            f"{D_FRAG}/qc/{{ref_name}}.ratio_profile.pdf",
+            ref_name=frag_ref_names,
+        ),
+        expand(
+            f"{D_FRAG}/qc/{{ref_name}}.arm_zscore_heatmap.pdf",
             ref_name=frag_ref_names,
         ),
 

@@ -219,6 +219,7 @@ dependencies:
   - bwa
   - fastp
   - fastqc
+  - r-data.table
   - r-tidyverse
   - samtools
   - snakemake
@@ -1076,6 +1077,558 @@ motifs <- bind_rows(motif_tibs, .id = "library") %>%
 write_tsv(motifs, motif_tsv)
 #+end_src
 
+*** Fragment length histograms
+**** Per-library histogram
+#+begin_src snakemake
+rule frag_length_hist:
+    message:
+        "Compute fragment length histogram from frag BED"
+    conda:
+        CONDA_FRAG
+    input:
+        bed = f"{D_FRAG}/frags/{{library_id}}.{{ref_name}}.frag.bed",
+    log:
+        cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_length_hist.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_length_hist.tsv"
+    params:
+        start_bp = config.get("length_hist", {}).get("start", 30),
+        end_bp   = config.get("length_hist", {}).get("end", 700),
+    threads:
+        1
+    output:
+        tsv = f"{D_FRAG}/histograms/{{library_id}}.{{ref_name}}.length_hist.tsv",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[length_hist] $(date) lib={wildcards.library_id} ref={wildcards.ref_name}"
+
+        mkdir -p "$(dirname {output.tsv})"
+        Rscript scripts/frag_length_hist.R \
+          "{input.bed}" "{output.tsv}" {params.start_bp} {params.end_bp}
+        """
+#+end_src
+
+#+begin_src R :tangle ./scripts/frag_length_hist.R
+#!/usr/bin/env Rscript
+args <- commandArgs(trailingOnly = TRUE)
+frag_bed <- args[1]
+out_tsv  <- args[2]
+start_bp <- as.integer(args[3])
+end_bp   <- as.integer(args[4])
+
+library(tidyverse)
+
+frags <- read_tsv(frag_bed, col_names = c("chr", "start", "end", "gc", "length"),
+                  col_types = "ciidi")
+
+hist_df <- frags %>%
+  filter(length >= start_bp, length <= end_bp) %>%
+  count(length, name = "count") %>%
+  right_join(tibble(length = start_bp:end_bp), by = "length") %>%
+  replace_na(list(count = 0L)) %>%
+  arrange(length)
+
+write_tsv(hist_df, out_tsv)
+#+end_src
+
+**** Frequency matrix
+#+begin_src snakemake
+rule frag_length_freq_matrix:
+    message:
+        "Aggregate fragment length histograms into frequency matrix"
+    conda:
+        CONDA_FRAG
+    input:
+        hists = lambda wc: expand(
+            f"{D_FRAG}/histograms/{{library_id}}.{{ref_name}}.length_hist.tsv",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=wc.ref_name,
+        ),
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_length_freq_matrix.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_frag_length_freq_matrix.tsv"
+    threads:
+        1
+    output:
+        counts = f"{D_FRAG}/histograms/{{ref_name}}.count_histogram.csv",
+        freqs  = f"{D_FRAG}/histograms/{{ref_name}}.freq_histogram.csv",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[freq_matrix] $(date) ref={wildcards.ref_name}"
+
+        mkdir -p "$(dirname {output.counts})"
+        Rscript scripts/frag_length_freq_matrix.R \
+          "{input.hists}" "{output.counts}" "{output.freqs}"
+        """
+#+end_src
+
+#+begin_src R :tangle ./scripts/frag_length_freq_matrix.R
+#!/usr/bin/env Rscript
+args <- commandArgs(trailingOnly = TRUE)
+hist_files <- args[1]
+out_counts <- args[2]
+out_freqs  <- args[3]
+
+library(tidyverse)
+
+files <- str_split(hist_files, " ")[[1]]
+
+all_hists <- map_dfr(files, function(f) {
+  lib_id <- str_extract(basename(f), "^[^.]+")
+  read_tsv(f, col_types = "ii") %>%
+    mutate(library = lib_id)
+})
+
+count_mat <- all_hists %>%
+  pivot_wider(names_from = length, values_from = count, values_fill = 0L) %>%
+  column_to_rownames("library")
+
+write.csv(count_mat, out_counts)
+
+freq_mat <- count_mat / rowSums(count_mat)
+
+write.csv(freq_mat, out_freqs)
+#+end_src
+
+*** DELFI features
+**** Arm z-scores
+Computes LOESS GC-corrected fragment counts per chromosome arm, then z-scores against a healthy reference cohort. Adapted from [[https://doi.org/10.1038/s41467-021-24994-w][Mathios et al. 2021]] via nf1_fragmentomics =delfi_armz.R=. Produces 38-39 features per sample (one per non-acrocentric autosomal arm).
+
+#+begin_src snakemake
+rule frag_arm_zscores:
+    message:
+        "Compute DELFI arm-level z-scores (Mathios method)"
+    conda:
+        CONDA_FRAG
+    input:
+        counts   = f"{D_FRAG}/frags/{{ref_name}}.frag_counts.tsv",
+        cytoband = config["cytoband"],
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_arm_zscores.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_frag_arm_zscores.tsv"
+    params:
+        healthy_libs = " ".join(FRAG_HEALTHY_LIBRARIES),
+    threads:
+        1
+    output:
+        csv = f"{D_FRAG}/features/{{ref_name}}.arm_zscores.csv",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[arm_zscores] $(date) ref={wildcards.ref_name}"
+
+        mkdir -p "$(dirname {output.csv})"
+
+        healthy_file=$(mktemp)
+        for lib in {params.healthy_libs}; do echo "$lib" >> "$healthy_file"; done
+
+        Rscript scripts/delfi_arm_zscores.R \
+          "{input.counts}" "{input.cytoband}" "$healthy_file" "{output.csv}"
+
+        rm -f "$healthy_file"
+        """
+#+end_src
+
+#+begin_src R :tangle ./scripts/delfi_arm_zscores.R
+#!/usr/bin/env Rscript
+# DELFI arm-level z-scores (Mathios et al. 2021)
+# Computes LOESS GC-corrected fragment counts per chromosome arm,
+# then z-scores against healthy reference cohort.
+
+args <- commandArgs(trailingOnly = TRUE)
+counts_tsv    <- args[1]
+cytoband_tsv  <- args[2]
+healthy_list  <- args[3]
+output_csv    <- args[4]
+
+library(tidyverse)
+library(data.table)
+
+counts    <- read_tsv(counts_tsv)
+cytobands <- read_tsv(cytoband_tsv,
+                       col_names = c("chr", "start", "end", "band", "stain"))
+healthy_libs <- read_lines(healthy_list)
+
+# Sum short + long to get total counts per bin
+counts <- counts %>%
+  group_by(library, chr, start, end, gc) %>%
+  summarize(count = sum(count), .groups = "drop")
+
+# Define non-acrocentric arms
+autosomes     <- paste0("chr", 1:22)
+noacro_chroms <- c(paste0("chr", 1:12), paste0("chr", 16:20))
+acro_chroms   <- setdiff(autosomes, noacro_chroms)
+
+noacro <- cytobands %>%
+  mutate(arm = substr(band, 1, 1)) %>%
+  group_by(chr, arm) %>%
+  summarize(armstart = min(start), armend = max(end), .groups = "drop") %>%
+  filter(chr %in% noacro_chroms | (chr %in% acro_chroms & arm == "q")) %>%
+  pivot_wider(names_from = arm, values_from = c(armstart, armend))
+
+# LOESS GC correction (from Lucas workflow)
+set.seed(42)
+
+gcCorrectLoess <- function(counts_mult, gc) {
+  if (length(counts_mult) < 4) {
+    warning("Fewer than 4 bins -- skipping LOESS GC correction")
+    return(rep(0, length(counts_mult)))
+  }
+  upper <- quantile(counts_mult, 0.99, na.rm = TRUE)
+  trend_points <- counts_mult > 0 & counts_mult < upper
+  trend_counts <- counts_mult[trend_points]
+  trend_gc     <- gc[trend_points]
+  n_sample     <- min(length(trend_counts), 10000L)
+  samp         <- sample(seq_along(trend_counts), n_sample)
+  include      <- c(which(gc == min(gc)), which(gc == max(gc)))
+  trend_counts <- c(counts_mult[include], trend_counts[samp])
+  trend_gc     <- c(gc[include], trend_gc[samp])
+  initial_trend <- suppressWarnings(loess(trend_counts ~ trend_gc))
+  i <- seq(min(gc, na.rm = TRUE), max(gc, na.rm = TRUE), by = 0.001)
+  final_trend <- suppressWarnings(loess(predict(initial_trend, i) ~ i))
+  predict(final_trend, gc)
+}
+
+# Annotate arms, filter to non-acrocentric
+arm_counts <- counts %>%
+  filter(chr %in% autosomes) %>%
+  left_join(noacro, by = "chr") %>%
+  mutate(arm = ifelse(end < armstart_q, "p", "q")) %>%
+  filter(chr %in% noacro_chroms | (chr %in% acro_chroms & arm == "q")) %>%
+  select(library, chr, start, end, gc, arm, count)
+
+# LOESS correction per library
+arm_counts_DT <- setDT(arm_counts)
+arm_counts_DT[, counts_mult := log2(count + 1)]
+arm_counts_DT[, loess_pred := gcCorrectLoess(counts_mult, gc), by = "library"]
+arm_counts_DT[, adjusted := counts_mult - loess_pred]
+arm_counts_DT[, adjusted_cent := adjusted - median(adjusted, na.rm = TRUE), by = "library"]
+
+# Aggregate to arm level
+arms <- arm_counts_DT[, .(armmean = mean(adjusted_cent, na.rm = TRUE)),
+                       by = .(library, chr, arm)]
+arms[, armmean := armmean - mean(armmean, na.rm = TRUE)]
+
+arms_tib <- as_tibble(arms)
+
+# Z-score against healthy cohort
+healthy_arms <- arms_tib %>%
+  filter(library %in% healthy_libs) %>%
+  group_by(chr, arm) %>%
+  summarize(mean = mean(armmean, na.rm = TRUE),
+            sd = sd(armmean, na.rm = TRUE), .groups = "drop")
+
+arm_z <- arms_tib %>%
+  left_join(healthy_arms, by = c("chr", "arm")) %>%
+  mutate(z = (armmean - mean) / sd) %>%
+  select(-mean, -sd, -armmean) %>%
+  unite(chr_arm, chr, arm, sep = "_") %>%
+  pivot_wider(names_from = chr_arm, values_from = z) %>%
+  column_to_rownames("library")
+
+write.csv(arm_z, file = output_csv, row.names = TRUE)
+#+end_src
+
+**** Ratio row-normalization
+Row-wise z-score normalization on DELFI ratios. The existing =make_ratios.R= zero-centers but does not scale. This step standardizes each library's ratio profile to zero mean, unit variance across bins, matching the input format expected by downstream classifiers.
+
+#+begin_src snakemake
+rule frag_ratio_row_normalize:
+    message:
+        "Row-normalize DELFI ratios (z-score per library)"
+    conda:
+        CONDA_FRAG
+    input:
+        tsv = f"{D_FRAG}/frags/{{ref_name}}.ratios.tsv",
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_ratio_row_normalize.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_frag_ratio_row_normalize.tsv"
+    threads:
+        1
+    output:
+        csv = f"{D_FRAG}/features/{{ref_name}}.ratios_normalized.csv",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[ratio_row_norm] $(date) ref={wildcards.ref_name}"
+
+        mkdir -p "$(dirname {output.csv})"
+        Rscript scripts/ratio_row_normalize.R \
+          "{input.tsv}" "{output.csv}"
+        """
+#+end_src
+
+#+begin_src R :tangle ./scripts/ratio_row_normalize.R
+#!/usr/bin/env Rscript
+# Row-normalize DELFI ratios: z-score each library's ratio profile
+# across genomic bins (zero mean, unit SD per library).
+
+args <- commandArgs(trailingOnly = TRUE)
+ratios_tsv <- args[1]
+output_csv <- args[2]
+
+library(tidyverse)
+
+ratios <- read_tsv(ratios_tsv)
+
+# Pivot to library x bin matrix
+ratio_mat <- ratios %>%
+  unite(bin, chr, start, end, sep = "_") %>%
+  select(library, bin, fract) %>%
+  pivot_wider(names_from = bin, values_from = fract) %>%
+  column_to_rownames("library")
+
+# Drop columns with any NA, drop non-autosomal
+ratio_mat <- ratio_mat[, !apply(ratio_mat, 2, anyNA)]
+ratio_mat <- ratio_mat[, !grepl("^chrX_|^chrY_|^chrM_", colnames(ratio_mat))]
+
+# Row-wise z-score normalization
+ratio_norm <- t(scale(t(ratio_mat)))
+
+write.csv(as.data.frame(ratio_norm), file = output_csv, row.names = TRUE)
+#+end_src
+
+*** QC visualizations
+**** Fragment length overlay
+Overlays all libraries' fragment length frequency profiles on one plot, optionally colored by group. Adapted from nf1_fragmentomics =nmf_frag_len_freq_plots.R=.
+
+#+begin_src snakemake
+rule frag_plot_length_overlay:
+    message:
+        "Plot fragment length distribution overlay"
+    conda:
+        CONDA_FRAG
+    input:
+        freq = f"{D_FRAG}/histograms/{{ref_name}}.freq_histogram.csv",
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_plot_length_overlay.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_frag_plot_length_overlay.tsv"
+    threads:
+        1
+    output:
+        pdf = f"{D_FRAG}/qc/{{ref_name}}.frag_length_overlay.pdf",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[plot_length_overlay] $(date) ref={wildcards.ref_name}"
+
+        mkdir -p "$(dirname {output.pdf})"
+        Rscript scripts/plot_frag_length_overlay.R \
+          "{input.freq}" "{output.pdf}"
+        """
+#+end_src
+
+#+begin_src R :tangle ./scripts/plot_frag_length_overlay.R
+#!/usr/bin/env Rscript
+# Fragment length distribution overlay plot.
+# Plots all libraries' frequency profiles, optionally colored by group.
+
+args <- commandArgs(trailingOnly = TRUE)
+freq_csv    <- args[1]
+output_pdf  <- args[2]
+samples_tsv <- if (length(args) >= 3) args[3] else NULL
+
+library(tidyverse)
+
+freq_mat <- read.csv(freq_csv, row.names = 1, check.names = FALSE)
+
+freq_long <- freq_mat %>%
+  rownames_to_column("library") %>%
+  pivot_longer(-library, names_to = "length", values_to = "freq") %>%
+  mutate(length = as.integer(length)) %>%
+  filter(length <= 400)
+
+if (!is.null(samples_tsv) && file.exists(samples_tsv)) {
+  samples <- read_tsv(samples_tsv, col_types = cols(
+    library_id = col_character(), group = col_character()
+  ))
+  freq_long <- freq_long %>%
+    left_join(samples, by = c("library" = "library_id"))
+} else {
+  freq_long$group <- "all"
+}
+
+p <- ggplot(freq_long, aes(x = length, y = freq,
+                            color = group, group = library)) +
+  geom_line(linewidth = 0.3, alpha = 0.4) +
+  theme_bw() +
+  labs(x = "Fragment length (bp)", y = "Frequency",
+       title = "Fragment length distributions") +
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.position = c(0.85, 0.85),
+        legend.background = element_rect(linewidth = 0.3, color = "black")) +
+  guides(color = guide_legend(override.aes = list(alpha = 1, linewidth = 1)))
+
+if (length(unique(freq_long$group)) == 1) {
+  p <- p + scale_color_manual(values = "grey30") + theme(legend.position = "none")
+}
+
+ggsave(output_pdf, p, width = 8, height = 5)
+#+end_src
+
+**** Ratio genome profile
+Plots the centered short/long ratio across genomic bins for each library. Standard in fragmentomics literature ([[https://doi.org/10.1126/stm.aaw9740][Cristiano et al. 2019]] Fig 1). Reveals arm-level copy number alterations as deviations from zero.
+
+#+begin_src snakemake
+rule frag_plot_ratio_profile:
+    message:
+        "Plot genome-wide DELFI ratio profile"
+    conda:
+        CONDA_FRAG
+    input:
+        tsv = f"{D_FRAG}/frags/{{ref_name}}.ratios.tsv",
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_plot_ratio_profile.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_frag_plot_ratio_profile.tsv"
+    threads:
+        1
+    output:
+        pdf = f"{D_FRAG}/qc/{{ref_name}}.ratio_profile.pdf",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[plot_ratio_profile] $(date) ref={wildcards.ref_name}"
+
+        mkdir -p "$(dirname {output.pdf})"
+        Rscript scripts/plot_ratio_profile.R \
+          "{input.tsv}" "{output.pdf}"
+        """
+#+end_src
+
+#+begin_src R :tangle ./scripts/plot_ratio_profile.R
+#!/usr/bin/env Rscript
+# Genome-wide DELFI ratio profile plot.
+# One panel per library, ratio.centered across genomic bins.
+
+args <- commandArgs(trailingOnly = TRUE)
+ratios_tsv <- args[1]
+output_pdf <- args[2]
+
+library(tidyverse)
+
+ratios <- read_tsv(ratios_tsv)
+
+# Create genomic coordinate for x-axis (numeric chromosome sort)
+ratios <- ratios %>%
+  mutate(chr_num = as.integer(gsub("chr", "", chr))) %>%
+  arrange(chr_num, start) %>%
+  mutate(genome_pos = row_number())
+
+# Alternating chromosome shading
+chr_bounds <- ratios %>%
+  group_by(library, chr_num) %>%
+  summarize(xmin = min(genome_pos), xmax = max(genome_pos), .groups = "drop") %>%
+  distinct(chr_num, xmin, xmax) %>%
+  mutate(shade = chr_num %% 2 == 0)
+
+n_libs <- length(unique(ratios$library))
+plot_height <- max(4, 2 * n_libs)
+
+p <- ggplot(ratios, aes(x = genome_pos, y = ratio.centered)) +
+  geom_rect(data = filter(chr_bounds, shade),
+            aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf),
+            inherit.aes = FALSE, fill = "grey90", alpha = 0.5) +
+  geom_point(size = 0.3, alpha = 0.6, color = "steelblue") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+  facet_wrap(~library, ncol = 1, scales = "free_y") +
+  theme_bw() +
+  labs(x = "Genomic position", y = "Centered ratio (short/long)",
+       title = "DELFI ratio genome profile") +
+  theme(plot.title = element_text(hjust = 0.5),
+        strip.background = element_rect(fill = "white"),
+        axis.text.x = element_blank(), axis.ticks.x = element_blank())
+
+ggsave(output_pdf, p, width = 12, height = plot_height)
+#+end_src
+
+**** Arm z-score heatmap
+Heatmap of samples x chromosome arms. Red/blue diverging palette, arms ordered by chromosome.
+
+#+begin_src snakemake
+rule frag_plot_arm_zscore_heatmap:
+    message:
+        "Plot arm z-score heatmap"
+    conda:
+        CONDA_FRAG
+    input:
+        csv = f"{D_FRAG}/features/{{ref_name}}.arm_zscores.csv",
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_plot_arm_zscore_heatmap.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_frag_plot_arm_zscore_heatmap.tsv"
+    threads:
+        1
+    output:
+        pdf = f"{D_FRAG}/qc/{{ref_name}}.arm_zscore_heatmap.pdf",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[plot_arm_zscore_heatmap] $(date) ref={wildcards.ref_name}"
+
+        mkdir -p "$(dirname {output.pdf})"
+        Rscript scripts/plot_arm_zscore_heatmap.R \
+          "{input.csv}" "{output.pdf}"
+        """
+#+end_src
+
+#+begin_src R :tangle ./scripts/plot_arm_zscore_heatmap.R
+#!/usr/bin/env Rscript
+# Arm z-score heatmap.
+# Rows = libraries, columns = chromosome arms, fill = z-score.
+
+args <- commandArgs(trailingOnly = TRUE)
+armz_csv   <- args[1]
+output_pdf <- args[2]
+
+library(tidyverse)
+
+armz <- read.csv(armz_csv, row.names = 1, check.names = FALSE)
+
+armz_long <- armz %>%
+  rownames_to_column("library") %>%
+  pivot_longer(-library, names_to = "arm", values_to = "z") %>%
+  mutate(
+    chr_num = as.integer(gsub("chr(\\d+)_.*", "\\1", arm)),
+    arm_letter = gsub("chr\\d+_", "", arm)
+  ) %>%
+  arrange(chr_num, arm_letter)
+
+arm_order <- armz_long %>%
+  distinct(arm, chr_num, arm_letter) %>%
+  arrange(chr_num, arm_letter) %>%
+  pull(arm)
+
+armz_long$arm <- factor(armz_long$arm, levels = arm_order)
+
+z_limit <- max(3, ceiling(quantile(abs(armz_long$z), 0.95, na.rm = TRUE)))
+
+n_libs <- length(unique(armz_long$library))
+plot_height <- max(4, 0.4 * n_libs + 2)
+plot_width <- max(8, 0.25 * length(arm_order) + 2)
+
+p <- ggplot(armz_long, aes(x = arm, y = library, fill = z)) +
+  geom_tile(color = "white", linewidth = 0.3) +
+  scale_fill_gradient2(low = "steelblue", mid = "white", high = "firebrick",
+                        midpoint = 0, limits = c(-z_limit, z_limit),
+                        name = "Z-score") +
+  theme_minimal() +
+  labs(x = "Chromosome arm", y = "Library",
+       title = "Arm-level z-scores") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
+        axis.text.y = element_text(size = 8),
+        panel.grid = element_blank())
+
+ggsave(output_pdf, p, width = plot_width, height = plot_height)
+#+end_src
+
 ** Testing
 *** Test data provenance
 Test data is paired-end WGS (whole-genome sequencing) of cell-free DNA, not EM-seq or bisulfite-seq. Samples are from [[https://www.ncbi.nlm.nih.gov/bioproject/PRJNA326698][PRJNA326698]] (Snyder et al. 2016, /Cell/), downloaded from NCBI SRA.
@@ -1259,6 +1812,7 @@ frag_ref_assemblies:
 
 gc5mb: tests/full/inputs/chr22.keep.bed
 blklist: tests/full/inputs/hg38-blacklist.v2.bed.gz
+cytoband: tests/full/inputs/cytoBand.chr22.txt
 
 healthy_libraries:
   - lib001
@@ -1438,6 +1992,44 @@ rule all:
         # Motif matrix
         expand(
             f"{D_FRAG}/motifs/{{ref_name}}.all_motifs.tsv",
+            ref_name=frag_ref_names,
+        ),
+        # Fragment length histograms
+        expand(
+            f"{D_FRAG}/histograms/{{library_id}}.{{ref_name}}.length_hist.tsv",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=frag_ref_names,
+        ),
+        # Frequency matrix
+        expand(
+            f"{D_FRAG}/histograms/{{ref_name}}.count_histogram.csv",
+            ref_name=frag_ref_names,
+        ),
+        expand(
+            f"{D_FRAG}/histograms/{{ref_name}}.freq_histogram.csv",
+            ref_name=frag_ref_names,
+        ),
+        # Arm z-scores
+        expand(
+            f"{D_FRAG}/features/{{ref_name}}.arm_zscores.csv",
+            ref_name=frag_ref_names,
+        ),
+        # Normalized ratios
+        expand(
+            f"{D_FRAG}/features/{{ref_name}}.ratios_normalized.csv",
+            ref_name=frag_ref_names,
+        ),
+        # QC plots
+        expand(
+            f"{D_FRAG}/qc/{{ref_name}}.frag_length_overlay.pdf",
+            ref_name=frag_ref_names,
+        ),
+        expand(
+            f"{D_FRAG}/qc/{{ref_name}}.ratio_profile.pdf",
+            ref_name=frag_ref_names,
+        ),
+        expand(
+            f"{D_FRAG}/qc/{{ref_name}}.arm_zscore_heatmap.pdf",
             ref_name=frag_ref_names,
         ),
 
