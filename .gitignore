@@ -13,3 +13,4 @@ tests/logs/
 tests/full/*
 !tests/full/inputs/
 !tests/full/inputs/**
+docs/superpowers/

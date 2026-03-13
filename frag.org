@@ -198,6 +198,7 @@ main "$@"
 :END:
 **** Change Log
 - Development since last tag
+  - [2026-03-13 Thu] Restored `** Fragment Length Window Optimization` (dropped by restructure moonshot). Added `*** ichorCNA Validation` with initial results, coverage-enrichment tradeoff, SNR breakeven model, and next steps. Updated career.org project heading with 4-phase plan.
   - [2026-03-12 Thu] Fixed pipeline: gc_map_bins (windowing+GC), count_merge (filename parsing), conda env (removed name:), documented test data provenance (WGS cfDNA, PRJNA326698)
   - [2026-03-12 Wed] Restructured to biopipe module pattern
   - [2025-12-17 Wed] Added test data set
@@ -1469,6 +1470,743 @@ rule symlink_input_fastqs:
 include: "frag.smk"
 
 #+end_src
+
+** Fragment Length Window Optimization for cfDNA ctDNA Enrichment :bioinfo-dev:
+:PROPERTIES:
+:ID:       61d07182-2526-484b-a889-b07cb9f0c8de
+:header-args:jupyter-R: :session ews :kernel biotools :async yes :exports code :dir /home/jeszyman/repos/frag/dev/fragment_window_optimization/ews_bootstrap
+:EXPORT_FILE_NAME: dev/fragment_window_optimization/ews_bootstrap/fragment_window_optimization
+:EXPORT_TITLE: Fragment Length Window Optimization for cfDNA ctDNA Enrichment
+:EXPORT_OPTIONS: toc:t num:t html-style:nil html-postamble:"<hr/><p style='text-align:right; color:#888; font-size:0.9em;'>Last compiled %T</p>"
+:EXPORT_HTML_HEAD: <link rel="stylesheet" type="text/css" href="../../../resources/org.css"/>
+:EXPORT_HTML_HEAD_EXTRA: <script type="text/javascript" async src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.9/MathJax.js?config=TeX-MML-AM_CHTML"></script> <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css"/> <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script> <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/r.min.js"></script> <script>document.addEventListener('DOMContentLoaded',function(){document.querySelectorAll('pre.src').forEach(function(b){b.classList.add('language-r');hljs.highlightElement(b)})});</script>
+:END:
+#+bibliography: resources/frag_refs.bib
+#+cite_export: csl ~/.emacs.d/elpa/org-ref-20240602.2029/citeproc/csl-styles/apa-numeric-superscript-brackets.csl
+- [[id:173e0331-9140-47d0-9e5e-ec91672ebdc3][cfDNA fragmentomics]]
+*** Background
+
+
+ctDNA is enriched for shorter fragments relative to healthy cfDNA, with elevated sub-nucleosomal reads below 150 bp [cite:@szymanski2021plos]. Both healthy and tumor distributions exhibit ~10.4 bp helical periodicity from nucleosome rotational positioning; ctDNA retains these peaks at the same positions but reweights their amplitude toward shorter lengths [cite:@mouliere2018a;@cristiano2019;@peneder2021]. CpG methylation shows parallel periodicity from the same structural origin [cite:@collings2017]. For the full biophysical mechanism, see [[id:359f3390-1e3c-43fe-93c4-4d0c6d8c87d9][Chromatin and nucleosome structure]].
+
+Mouliere et al. (Sci Transl Med 2018) demonstrated that restricting cfDNA analysis to 90–150 bp improves CNA sensitivity [cite:@mouliere2018a]. That window was defined in PDX models and has been applied as a fixed heuristic. No published method uses permutation testing and bootstrap resampling to jointly determine what enrichment exceeds chance and what enrichment is reproducible, producing CNA-compatible discrete windows without prior size assumptions.
+
+This project treats fragment-length window selection as a statistical feature selection problem. Per-bin enrichment ratios, permutation null distributions, and bootstrap selection frequencies identify windows that are both significant and stable. The output is a set of discrete fragment-length windows for BAM filtering upstream of ichorCNA. For the statistical methodology, see [[id:0f1f4aa4-c755-42ff-8f81-8a32c14293a0][cfDNA bioinformatics (biotools.org)]].
+
+Impact is likely limited in high tumor-fraction samples where CNA signal is already strong. In low-ctDNA settings, even modest gains in effective tumor fraction or reductions in coverage noise could meaningfully improve CNA sensitivity, with potential utility for small tumor or minimal residual disease scenarios.
+
+
+Lilli Senders analyzed cfDNA fragment length enrichment in 28 sarcoma (Ewing and other subtypes) vs 17 healthy cfDNA samples using EM-seq on hg38. Sample selection used two orthogonal biomarkers: ichorCNA TF > 0.02 and pan-sarcoma methylation z-score > -1.96. Permutation testing (1000× per-base label shuffling) identified 58–129 bp as the enriched window (51 bins exceeding per-base 95th percentile thresholds). Bootstrap stability failed: maximum selection frequency = 0.84, with 0 bins achieving γ ≥ 0.90 and only 4 bins at γ ≥ 0.80.
+
+*** Data
+
+Pre-computed outputs from Lilli Senders are at [[file:/mnt/gcs/lilli/ewing/analysis_bundle/permutation_bootstrap_jeff][permutation_bootstrap_jeff/]]. All fragment length bins span 50–450 bp (401 bins, 1 bp resolution). Frequencies are already normalized to sum to 1 per sample.
+
+| File                                  | Contents                                              |
+|---------------------------------------+-------------------------------------------------------|
+| =per_bam_fragment_frequencies.tsv=    | 45 samples × 401 bins, per-sample normalized freq     |
+| =fragment_enrichment_curve.tsv=       | Enrichment ratio, p_cancer, p_healthy per length      |
+| =per_base_permutation_thresholds.tsv= | Per-base 95th percentile null thresholds (401 values) |
+| =sample_selection_metadata.tsv=       | Sample TF (ichorCNA), methylation z-score, group      |
+| =significant_fragment_bins.tsv=       | 51 bins (58–129 bp) exceeding permutation threshold   |
+
+28 cancer samples (sarcoma, EM-seq hg38); 17 healthy. Sample selection used ichorCNA TF > 0.02 and pan-sarcoma methylation z-score > −1.96.
+
+#+begin_src jupyter-R :tangle ./dev/fragment_window_optimization/ews_bootstrap/00_load_data.R
+library(tidyverse)
+library(furrr)
+
+DATA_DIR <- "/mnt/gcs/lilli/ewing/analysis_bundle/permutation_bootstrap_jeff"
+
+freq_wide        <- read_tsv(file.path(DATA_DIR, "per_bam_fragment_frequencies.tsv"),    show_col_types = FALSE)
+lilli_enrichment <- read_tsv(file.path(DATA_DIR, "fragment_enrichment_curve.tsv"),       show_col_types = FALSE)
+lilli_perm_tau   <- read_tsv(file.path(DATA_DIR, "per_base_permutation_thresholds.tsv"), show_col_types = FALSE)
+meta             <- read_tsv(file.path(DATA_DIR, "sample_selection_metadata.tsv"),       show_col_types = FALSE)
+sig_bins         <- read_tsv(file.path(DATA_DIR, "significant_fragment_bins.tsv"),       show_col_types = FALSE)
+
+freq_long <- freq_wide |>
+  pivot_longer(-sample, names_to = "length_str", values_to = "frequency") |>
+  mutate(fragment_length = as.integer(str_remove(length_str, "bp_"))) |>
+  select(-length_str) |>
+  left_join(meta |> select(sample, selected, tf), by = "sample")
+
+cancer_ids  <- meta |> filter(selected == "cancer")  |> pull(sample)
+healthy_ids <- meta |> filter(selected == "healthy") |> pull(sample)
+
+cat("Cancer samples: ", length(cancer_ids), "\n")
+cat("Healthy samples:", length(healthy_ids), "\n")
+cat("Length bins:    ", n_distinct(freq_long$fragment_length), "\n")
+#+end_src
+
+*** Fragment frequency profiles
+
+Raw normalized fragment length frequencies for all samples, plotted over the full 50–450 bp range. Healthy samples shown as mean ± 2 SD ribbon (blue). Cancer samples shown as individual lines colored by ichorCNA tumor fraction (gold = low TF, red = high TF). The nucleosome ladder (mono ~167 bp, di ~334 bp) is visible in healthy; cancer samples show relative short-fragment enrichment proportional to TF.
+
+#+begin_src jupyter-R :tangle no
+healthy_ribbon <- freq_long |>
+  filter(selected == "healthy") |>
+  group_by(fragment_length) |>
+  summarise(h_mean = mean(frequency),
+            h_lo   = min(frequency),
+            h_hi   = max(frequency),
+            .groups = "drop")
+
+cancer_lines <- freq_long |>
+  filter(selected == "cancer")
+
+p_freq <- ggplot() +
+  geom_ribbon(data = healthy_ribbon,
+              aes(x = fragment_length, ymin = h_lo, ymax = h_hi),
+              fill = "steelblue", alpha = 0.25) +
+  geom_line(data = healthy_ribbon,
+            aes(x = fragment_length, y = h_mean),
+            color = "steelblue", linewidth = 0.9) +
+  geom_line(data = cancer_lines,
+            aes(x = fragment_length, y = frequency,
+                group = sample, color = tf),
+            linewidth = 0.3, alpha = 0.8) +
+  geom_vline(xintercept = 167, linetype = "dotted", color = "gray40", linewidth = 0.6) +
+  scale_color_gradient(low = "#FEE08B", high = "#A50026", name = "TF") +
+  labs(title    = "Raw fragment length frequencies",
+       subtitle = "Blue = healthy mean + range  |  Lines = individual cancer samples colored by TF",
+       x = "Fragment length (bp)", y = "Frequency") +
+  theme_minimal() + theme(legend.position = "right")
+
+dir.create("plots", showWarnings = FALSE)
+ggsave("plots/04a_raw_freq.png", p_freq, width = 12, height = 5, dpi = 150)
+#+end_src
+
+#+ATTR_ORG: :width 800
+[[file:dev/fragment_window_optimization/ews_bootstrap/plots/04a_raw_freq.png]]
+
+
+*** Enrichment and permutation
+
+Observed enrichment is the ratio p_cancer / p_healthy at each fragment length bin, computed on cohort means. The null distribution is derived by 5000× label-shuffling: cancer/healthy assignments are permuted, enrichment recomputed, and the 95th and 99th percentile thresholds extracted per bin independently. This per-base approach accounts for length-dependent variance in the null. 5000 permutations provides ~250 tail observations per bin for the 95th percentile and ~50 for the 99th percentile — sufficient for stable threshold estimation at both levels.
+
+#+begin_src jupyter-R :tangle ./dev/fragment_window_optimization/ews_bootstrap/01_permutation.R
+if (!exists("freq_long")) source("00_load_data.R")
+
+N_PERM  <- 5000
+EPSILON <- 1e-8
+
+all_samples <- c(cancer_ids, healthy_ids)
+n_cancer    <- length(cancer_ids)
+
+plan(multisession, workers = parallel::detectCores() - 1)
+set.seed(42)
+
+perm_results <- future_map_dfr(1:N_PERM, function(i) {
+  perm_c <- sample(all_samples, n_cancer, replace = FALSE)
+  perm_h <- setdiff(all_samples, perm_c)
+  p_c <- freq_long |> filter(sample %in% perm_c) |>
+    group_by(fragment_length) |> summarise(p_c = mean(frequency), .groups = "drop")
+  p_h <- freq_long |> filter(sample %in% perm_h) |>
+    group_by(fragment_length) |> summarise(p_h = mean(frequency), .groups = "drop")
+  p_c |> left_join(p_h, by = "fragment_length") |>
+    mutate(enrichment_null = p_c / (p_h + EPSILON), perm_id = i) |>
+    select(perm_id, fragment_length, enrichment_null)
+}, .options = furrr_options(seed = TRUE), .progress = TRUE)
+
+our_perm_tau <- perm_results |>
+  group_by(fragment_length) |>
+  summarise(threshold_95 = quantile(enrichment_null, 0.95),
+            threshold_99 = quantile(enrichment_null, 0.99),
+            .groups = "drop")
+
+obs_enrichment <- freq_long |>
+  group_by(fragment_length, selected) |>
+  summarise(mean_freq = mean(frequency), .groups = "drop") |>
+  pivot_wider(names_from = selected, values_from = mean_freq) |>
+  mutate(enrichment = cancer / (healthy + EPSILON)) |>
+  left_join(our_perm_tau, by = "fragment_length") |>
+  mutate(sig_95 = enrichment > threshold_95,
+         sig_99 = enrichment > threshold_99)
+
+cat("Bins exceeding 95th percentile:", sum(obs_enrichment$sig_95),
+    "| range:", range(filter(obs_enrichment, sig_95)$fragment_length), "\n")
+cat("Bins exceeding 99th percentile:", sum(obs_enrichment$sig_99),
+    "| range:", range(filter(obs_enrichment, sig_99)$fragment_length), "\n")
+
+dir.create("data", showWarnings = FALSE)
+write_tsv(our_perm_tau,   "data/our_perm_tau.tsv")
+write_tsv(obs_enrichment, "data/our_obs_enrichment.tsv")
+# Save raw null at representative bins for stability diagnostic
+perm_results |>
+  filter(fragment_length %in% c(70, 80, 90, 100, 110, 120)) |>
+  write_tsv("data/perm_null_representative.tsv")
+plan(sequential)
+#+end_src
+
+*** Permutation stability diagnostic
+
+Running 95th and 99th percentile estimates at six representative bins as permutation count accumulates from 100 to 5000. Stable estimates confirm that 5000 permutations is sufficient.
+
+#+begin_src jupyter-R :tangle no
+perm_rep <- read_tsv("data/perm_null_representative.tsv", show_col_types = FALSE)
+
+checkpoints <- c(100, 200, 500, 1000, 2000, 5000)
+
+stability <- map_dfr(checkpoints, function(n) {
+  perm_rep |>
+    filter(perm_id <= n) |>
+    group_by(fragment_length) |>
+    summarise(tau_95 = quantile(enrichment_null, 0.95),
+              tau_99 = quantile(enrichment_null, 0.99),
+              .groups = "drop") |>
+    mutate(n_perm = n)
+})
+
+p_stability <- stability |>
+  pivot_longer(c(tau_95, tau_99), names_to = "threshold", values_to = "value") |>
+  mutate(threshold = recode(threshold, tau_95 = "95th pct", tau_99 = "99th pct"),
+         fragment_length = factor(paste0(fragment_length, " bp"))) |>
+  ggplot(aes(x = n_perm, y = value, color = fragment_length)) +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 1.5) +
+  facet_wrap(~threshold, scales = "free_y") +
+  scale_x_continuous(breaks = checkpoints) +
+  labs(title = "Permutation null threshold stability",
+       subtitle = "Running estimate at 6 representative bins as permutation count increases",
+       x = "Number of permutations", y = "Threshold value", color = "Fragment length") +
+  theme_minimal() + theme(legend.position = "bottom",
+                          axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave("plots/perm_stability.png", p_stability, width = 10, height = 5, dpi = 150)
+cat("Saved plots/perm_stability.png\n")
+#+end_src
+
+#+ATTR_ORG: :width 800
+[[file:dev/fragment_window_optimization/ews_bootstrap/plots/perm_stability.png]]
+
+#+begin_src jupyter-R :tangle no
+p_enrich <- ggplot(obs_enrichment, aes(x = fragment_length)) +
+  geom_rect(data = filter(obs_enrichment, sig_95),
+            aes(xmin = fragment_length - 0.5, xmax = fragment_length + 0.5,
+                ymin = -Inf, ymax = Inf),
+            fill = "firebrick", alpha = 0.12, inherit.aes = FALSE) +
+  geom_rect(data = filter(obs_enrichment, sig_99),
+            aes(xmin = fragment_length - 0.5, xmax = fragment_length + 0.5,
+                ymin = -Inf, ymax = Inf),
+            fill = "firebrick", alpha = 0.18, inherit.aes = FALSE) +
+  geom_line(aes(y = threshold_99), linetype = "dotted", color = "gray60", linewidth = 0.5) +
+  geom_line(aes(y = threshold_95), linetype = "dashed", color = "gray40", linewidth = 0.6) +
+  geom_line(aes(y = enrichment), color = "black", linewidth = 0.8) +
+  geom_vline(xintercept = 167, linetype = "dotted", color = "gray40", linewidth = 0.6) +
+  labs(title    = "Fragment length enrichment with permutation thresholds",
+       subtitle = "Dashed = 95th pct null  |  Dotted = 99th pct null  |  Red = significant bins (light 95%, dark 99%)",
+       x = "Fragment length (bp)", y = "Enrichment ratio") +
+  theme_minimal()
+
+dir.create("plots", showWarnings = FALSE)
+ggsave("plots/enrichment.png", p_enrich, width = 12, height = 5, dpi = 150)
+#+end_src
+
+#+ATTR_ORG: :width 800
+[[file:dev/fragment_window_optimization/ews_bootstrap/plots/enrichment.png]]
+
+The enrichment curve peaks near 4× in the very short fragment region (~57–75 bp) then declines through the significant window. Signal is sustained above the 95th percentile null from 57–129 bp and above the 99th percentile from 63–107 bp. The curve crosses below the 95th percentile threshold at ~130 bp and stays below it through the rest of the range.
+
+The null thresholds (dashed = 95th, dotted = 99th) rise steeply beyond ~200 bp. This is expected: long-fragment bins have very low counts in both groups, so the null distribution is wide and the threshold is proportionally high. It does not indicate signal at long fragments; the enrichment curve is well below both thresholds there.
+
+The oscillations from ~115–160 bp (~10 bp periodicity) reflect nucleosomal helical repeat structure — cfDNA cleavage is phased relative to the histone octamer. These are real but not exploitable for window selection.
+
+*** Bootstrap stability
+
+Each bootstrap replicate resamples cancer and healthy IDs with replacement, computes enrichment at each bin, and records whether enrichment exceeds the per-base 95th percentile null threshold from our permutation. Selection frequency is the fraction of 1000 replicates in which each bin exceeds its threshold. The permutation-derived window is the primary result; bootstrap stability is a diagnostic of reproducibility under resampling noise, not a window-selection gate.
+
+#+begin_src jupyter-R :tangle ./dev/fragment_window_optimization/ews_bootstrap/02_standard_bootstrap.R
+if (!exists("freq_long"))    source("00_load_data.R")
+if (!exists("our_perm_tau")) our_perm_tau <- read_tsv("data/our_perm_tau.tsv", show_col_types = FALSE)
+
+N_BOOT  <- 1000
+EPSILON <- 1e-8
+plan(multisession, workers = parallel::detectCores() - 1)
+set.seed(42)
+
+run_boot <- function(i) {
+  c_boot <- sample(cancer_ids,  length(cancer_ids),  replace = TRUE)
+  h_boot <- sample(healthy_ids, length(healthy_ids), replace = TRUE)
+  p_c <- freq_long |> filter(sample %in% c_boot) |>
+    group_by(fragment_length) |> summarise(p_c = mean(frequency), .groups = "drop")
+  p_h <- freq_long |> filter(sample %in% h_boot) |>
+    group_by(fragment_length) |> summarise(p_h = mean(frequency), .groups = "drop")
+  p_c |> left_join(p_h, by = "fragment_length") |>
+    mutate(enrichment = p_c / (p_h + EPSILON)) |>
+    left_join(our_perm_tau, by = "fragment_length") |>
+    mutate(exceeds = enrichment > threshold_95) |>
+    select(fragment_length, exceeds)
+}
+
+boot_results <- future_map_dfr(1:N_BOOT, run_boot,
+                               .options = furrr_options(seed = TRUE),
+                               .progress = TRUE)
+
+sel_freq <- boot_results |>
+  group_by(fragment_length) |>
+  summarise(selection_freq = mean(exceeds), .groups = "drop")
+
+cat("Max selection frequency:", round(max(sel_freq$selection_freq), 3), "\n")
+cat("Bins >= 0.50:", sum(sel_freq$selection_freq >= 0.50), "\n")
+cat("Bins >= 0.70:", sum(sel_freq$selection_freq >= 0.70), "\n")
+cat("Bins >= 0.90:", sum(sel_freq$selection_freq >= 0.90), "\n")
+
+dir.create("data", showWarnings = FALSE)
+write_tsv(sel_freq, "data/02_standard_selection_freq.tsv")
+#+end_src
+
+#+begin_src jupyter-R :tangle no
+our_sig_bins_95 <- obs_enrichment |> filter(sig_95) |> pull(fragment_length)
+
+p_boot <- sel_freq |>
+  ggplot(aes(x = fragment_length, y = selection_freq)) +
+  geom_rect(data = filter(obs_enrichment, sig_95),
+            aes(xmin = fragment_length - 0.5, xmax = fragment_length + 0.5,
+                ymin = -Inf, ymax = Inf),
+            fill = "firebrick", alpha = 0.15, inherit.aes = FALSE) +
+  geom_hline(yintercept = c(0.50, 0.70, 0.90),
+             linetype = "dashed", color = "gray60", linewidth = 0.4) +
+  geom_line(linewidth = 0.8, color = "steelblue") +
+  geom_vline(xintercept = 167, linetype = "dotted", color = "gray40", linewidth = 0.6) +
+  labs(title    = "Standard bootstrap: per-bin selection frequency",
+       subtitle = "Fraction of 1000 replicates exceeding per-base 95th pct null  |  Red = permutation window (57–129 bp)",
+       x = "Fragment length (bp)", y = "Selection frequency") +
+  theme_minimal()
+
+dir.create("plots", showWarnings = FALSE)
+ggsave("plots/bootstrap_standard.png", p_boot, width = 12, height = 5, dpi = 150)
+#+end_src
+
+#+ATTR_ORG: :width 800
+[[file:dev/fragment_window_optimization/ews_bootstrap/plots/bootstrap_standard.png]]
+
+Peak selection frequency reaches 0.949 — just below the 0.95 threshold — at approximately 75 bp. Six bins exceed 0.90 and 29 exceed 0.70. The helical periodicity oscillations (~10 bp) seen in the enrichment curve are reproduced here as alternating peaks and troughs of selection frequency across the permutation window, reflecting the same nucleosomal phasing signal. No single bin achieves consistent selection across all replicates.
+
+This is the expected result for a TF-heterogeneous cohort with standard resampling. Low-TF cancer samples drawn into a replicate dilute the enrichment signal below threshold. The permutation window (57–129 bp) remains valid as the population-level result; bootstrap stability under standard resampling is limited by TF variance, not absence of signal.
+
+*** Sample QC and exclusion
+
+Two samples (ES089, ES077) show markedly attenuated nucleosome peaks at 167 bp relative to the rest of the cohort. This section applies three independent QC criteria — nucleosome peak floor, TF floor, and intra-cancer shape consistency — to identify exclusions, then re-runs permutation and bootstrap on the filtered cohort.
+
+**** Nucleosome peak QC
+
+Exclude samples whose normalized frequency at 167 bp falls below a threshold. The 167 bp mono-nucleosome peak is a quality indicator for cfDNA library integrity; very low values suggest degraded or atypical DNA.
+
+#+begin_src jupyter-R :tangle no
+if (!exists("freq_long")) source("00_load_data.R")
+
+nuc_peak <- freq_long |>
+  filter(fragment_length == 167) |>
+  select(sample, selected, tf, freq_167 = frequency) |>
+  arrange(freq_167)
+
+print(nuc_peak, n = 20)
+#+end_src
+
+**** TF floor
+
+#+begin_src jupyter-R :tangle no
+meta |>
+  filter(selected == "cancer") |>
+  arrange(tf) |>
+  select(sample, tf) |>
+  print(n = 28)
+#+end_src
+
+**** Intra-cancer shape consistency
+
+Cancer cfDNA profiles differ systematically from healthy cfDNA (short-fragment enrichment, attenuated nucleosome peak), so correlation to the healthy mean is not a valid quality metric: high-ctDNA samples will be penalized regardless of library quality. Instead, each cancer sample is correlated to the cancer cohort mean. Outliers within the cancer group indicate aberrant library preparation rather than elevated ctDNA.
+
+#+begin_src jupyter-R :tangle no
+if (!exists("freq_long")) source("00_load_data.R")
+
+cancer_mean_profile <- freq_long |>
+  filter(selected == "cancer") |>
+  group_by(fragment_length) |>
+  summarise(mean_freq = mean(frequency), .groups = "drop") |>
+  arrange(fragment_length)
+
+cancer_shape_cor <- freq_long |>
+  filter(selected == "cancer") |>
+  arrange(fragment_length) |>
+  group_by(sample, tf) |>
+  summarise(r = cor(frequency, cancer_mean_profile$mean_freq), .groups = "drop") |>
+  arrange(r)
+
+print(cancer_shape_cor, n = 28)
+#+end_src
+
+**** Exclusion decision
+
+Two independent criteria are applied for method development. First, nucleosome peak: ES089 and ES077 (167 bp frequency 0.013 and 0.014) fall below a threshold of 0.018, with a natural gap to the next sample (ES016 at 0.020); both are also the two lowest intra-cancer correlations (0.890, 0.947). Second, TF floor: for window optimization, samples with very low tumor fraction contribute minimal ctDNA signal and inflate variance; samples with TF < 0.015 are excluded (ES078 = 0.007, ES025 = 0.009, ES056 = 0.011, ES038 = 0.014, ES015 = 0.014). Combined, 7 samples are excluded, leaving 21 cancer samples for permutation and bootstrap.
+
+#+begin_src jupyter-R :tangle no
+if (!exists("freq_long")) source("00_load_data.R")
+
+NUC_THRESH <- 0.018
+TF_THRESH  <- 0.015
+
+excl_nuc <- freq_long |>
+  filter(fragment_length == 167, selected == "cancer") |>
+  filter(frequency < NUC_THRESH) |>
+  pull(sample)
+
+excl_tf  <- meta |>
+  filter(selected == "cancer", tf < TF_THRESH) |>
+  pull(sample)
+
+EXCL_SAMPLES  <- union(excl_nuc, excl_tf)
+cancer_ids_qc <- setdiff(cancer_ids, EXCL_SAMPLES)
+freq_long_qc  <- freq_long |> filter(!sample %in% EXCL_SAMPLES)
+
+cat("Excluded by nucleosome peak:", paste(sort(excl_nuc), collapse = ", "), "\n")
+cat("Excluded by TF floor:", paste(sort(excl_tf), collapse = ", "), "\n")
+cat("Total excluded:", length(EXCL_SAMPLES), "\n")
+cat("Retained cancer:", length(cancer_ids_qc),
+    "| Retained healthy:", length(healthy_ids), "\n")
+#+end_src
+
+**** Permutation (QC-filtered cohort)
+
+Repeat the 5000× label-shuffle permutation on the QC-filtered cohort. Uses the same per-base approach as the full-cohort permutation.
+
+#+begin_src jupyter-R :tangle no
+plan(multisession, workers = 8)
+set.seed(42)
+N_PERM    <- 5000
+EPSILON   <- 1e-8
+
+all_samples_qc <- c(cancer_ids_qc, healthy_ids)
+n_cancer_qc    <- length(cancer_ids_qc)
+
+perm_results_qc <- future_map_dfr(seq_len(N_PERM), function(i) {
+  perm_c <- sample(all_samples_qc, n_cancer_qc, replace = FALSE)
+  perm_h <- setdiff(all_samples_qc, perm_c)
+  p_c <- freq_long_qc |> filter(sample %in% perm_c) |>
+    group_by(fragment_length) |> summarise(p_c = mean(frequency), .groups = "drop")
+  p_h <- freq_long_qc |> filter(sample %in% perm_h | sample %in% healthy_ids) |>
+    group_by(fragment_length) |> summarise(p_h = mean(frequency), .groups = "drop")
+  p_c |> left_join(p_h, by = "fragment_length") |>
+    mutate(enrichment_null = p_c / (p_h + EPSILON)) |>
+    select(fragment_length, enrichment_null)
+}, .options = furrr_options(seed = TRUE), .progress = TRUE)
+
+perm_tau_qc <- perm_results_qc |>
+  group_by(fragment_length) |>
+  summarise(threshold_95 = quantile(enrichment_null, 0.95),
+            threshold_99 = quantile(enrichment_null, 0.99),
+            .groups = "drop")
+
+obs_enrichment_qc <- freq_long_qc |>
+  group_by(fragment_length, selected) |>
+  summarise(mean_freq = mean(frequency), .groups = "drop") |>
+  pivot_wider(names_from = selected, values_from = mean_freq) |>
+  mutate(enrichment = cancer / (healthy + EPSILON)) |>
+  left_join(perm_tau_qc, by = "fragment_length") |>
+  mutate(sig_95 = enrichment > threshold_95,
+         sig_99 = enrichment > threshold_99)
+
+cat("QC — 95% sig bins:", sum(obs_enrichment_qc$sig_95, na.rm = TRUE),
+    "| range:", paste(range(obs_enrichment_qc$fragment_length[obs_enrichment_qc$sig_95 & !is.na(obs_enrichment_qc$sig_95)]), collapse = "–"), "\n")
+cat("QC — 99% sig bins:", sum(obs_enrichment_qc$sig_99, na.rm = TRUE),
+    "| range:", paste(range(obs_enrichment_qc$fragment_length[obs_enrichment_qc$sig_99 & !is.na(obs_enrichment_qc$sig_99)]), collapse = "–"), "\n")
+
+write_tsv(obs_enrichment_qc, "data/qc_obs_enrichment.tsv")
+plan(sequential)
+#+end_src
+
+**** Bootstrap stability (QC-filtered cohort)
+
+#+begin_src jupyter-R :tangle no
+plan(multisession, workers = 8)
+set.seed(123)
+N_BOOT <- 1000
+
+boot_results_qc <- future_map_dfr(seq_len(N_BOOT), function(i) {
+  boot_cancer  <- sample(cancer_ids_qc, replace = TRUE)
+  boot_healthy <- sample(healthy_ids,   replace = TRUE)
+  boot_c <- freq_long_qc |> filter(sample %in% boot_cancer) |>
+    group_by(fragment_length) |> summarise(p_c = mean(frequency), .groups = "drop")
+  boot_h <- freq_long    |> filter(sample %in% boot_healthy) |>
+    group_by(fragment_length) |> summarise(p_h = mean(frequency), .groups = "drop")
+  boot_c |> left_join(boot_h, by = "fragment_length") |>
+    mutate(enrichment = p_c / (p_h + EPSILON)) |>
+    left_join(select(obs_enrichment_qc, fragment_length, threshold_95), by = "fragment_length") |>
+    mutate(selected = enrichment >= threshold_95) |>
+    select(fragment_length, selected)
+}, .options = furrr_options(seed = TRUE), .progress = TRUE)
+
+sel_freq_qc <- boot_results_qc |>
+  group_by(fragment_length) |>
+  summarise(selection_freq = mean(selected), .groups = "drop")
+
+cat("QC bootstrap — max selection freq:", round(max(sel_freq_qc$selection_freq), 3), "\n")
+cat("Bins >= 0.90:", sum(sel_freq_qc$selection_freq >= 0.90), "\n")
+cat("Bins >= 0.70:", sum(sel_freq_qc$selection_freq >= 0.70), "\n")
+
+write_tsv(sel_freq_qc, "data/qc_selection_freq.tsv")
+plan(sequential)
+#+end_src
+
+**** QC comparison plot
+
+#+begin_src jupyter-R :tangle no
+if (!exists("obs_enrichment")) obs_enrichment <- read_tsv("data/our_obs_enrichment.tsv", show_col_types = FALSE)
+if (!exists("sel_freq_full"))  sel_freq_full  <- read_tsv("data/02_standard_selection_freq.tsv", show_col_types = FALSE)
+
+p_qc_enrich <- bind_rows(
+  obs_enrichment    |> transmute(fragment_length, enrichment, cohort = "Full (n=28)"),
+  obs_enrichment_qc |> transmute(fragment_length, enrichment, cohort = "QC-filtered (n=21)")
+) |>
+  ggplot(aes(x = fragment_length, y = enrichment, color = cohort)) +
+  geom_line(linewidth = 0.7) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "gray50") +
+  scale_color_manual(values = c("Full (n=28)" = "steelblue", "QC-filtered (n=21)" = "firebrick")) +
+  scale_x_continuous(limits = c(50, 200)) +
+  labs(title = "Enrichment: full vs QC-filtered cohort",
+       x = "Fragment length (bp)", y = "p_cancer / p_healthy", color = NULL) +
+  theme_minimal() + theme(legend.position = "bottom")
+
+p_qc_boot <- bind_rows(
+  sel_freq_full |> mutate(cohort = "Full (n=28)"),
+  sel_freq_qc   |> mutate(cohort = "QC-filtered (n=21)")
+) |>
+  ggplot(aes(x = fragment_length, y = selection_freq, color = cohort)) +
+  geom_line(linewidth = 0.7) +
+  geom_hline(yintercept = c(0.70, 0.90), linetype = "dashed", color = "gray60", linewidth = 0.4) +
+  scale_color_manual(values = c("Full (n=28)" = "steelblue", "QC-filtered (n=21)" = "firebrick")) +
+  scale_x_continuous(limits = c(50, 200)) +
+  labs(title = "Bootstrap stability: full vs QC-filtered cohort",
+       x = "Fragment length (bp)", y = "Selection frequency", color = NULL) +
+  theme_minimal() + theme(legend.position = "bottom")
+
+dir.create("plots", showWarnings = FALSE)
+ggsave("plots/qc_enrichment_comparison.png", p_qc_enrich, width = 10, height = 4, dpi = 150)
+ggsave("plots/qc_bootstrap_comparison.png",  p_qc_boot,   width = 10, height = 4, dpi = 150)
+cat("Saved qc_enrichment_comparison.png and qc_bootstrap_comparison.png\n")
+#+end_src
+
+#+ATTR_ORG: :width 800
+[[file:dev/fragment_window_optimization/ews_bootstrap/plots/qc_enrichment_comparison.png]]
+
+#+ATTR_ORG: :width 800
+[[file:dev/fragment_window_optimization/ews_bootstrap/plots/qc_bootstrap_comparison.png]]
+
+Removing 7 low-quality and low-TF samples shifts the permutation window slightly (66–165 bp at 95%, vs 57–129 bp in the full cohort) but reduces bootstrap stability (max selection frequency 0.888 vs 0.949 in full cohort; 0 bins ≥ 0.90 vs 6). The reduction in stability reflects the sample-size penalty of the bootstrap: with only 21 cancer samples, per-replicate variance increases and per-bin selection frequencies fall. The enrichment signal is present but the statistical resolution of the bootstrap is weaker at n = 21 than n = 28. The full cohort remains the primary analytic set; QC-filtered results are reported for comparison.
+
+*** Window discovery
+
+Significant bins from the permutation test are merged into contiguous windows using a gap-fill of ≤ 2 bp (isolated gaps of 1–2 bp between significant bins are bridged). This produces discrete candidate windows at the 95th and 99th percentile thresholds.
+
+#+begin_src jupyter-R :tangle no
+if (!exists("obs_enrichment")) obs_enrichment <- read_tsv("data/our_obs_enrichment.tsv", show_col_types = FALSE)
+
+merge_windows <- function(bins, gap_fill = 2) {
+  bins <- sort(bins)
+  if (length(bins) == 0) return(tibble(start = integer(), end = integer(),
+                                       n_sig_bins = integer(), width = integer()))
+  window_id <- cumsum(c(1, diff(bins) > gap_fill + 1))
+  tibble(fragment_length = bins, window_id) |>
+    group_by(window_id) |>
+    summarise(start      = min(fragment_length),
+              end        = max(fragment_length),
+              n_sig_bins = n(),
+              width      = max(fragment_length) - min(fragment_length) + 1,
+              .groups    = "drop") |>
+    select(-window_id)
+}
+
+# Narrow gap-fill: strict contiguous merging
+windows_95_narrow <- merge_windows(obs_enrichment$fragment_length[obs_enrichment$sig_95], gap_fill = 2)
+windows_99_narrow <- merge_windows(obs_enrichment$fragment_length[obs_enrichment$sig_99], gap_fill = 2)
+
+# Helical gap-fill: bridge valleys up to one full helical turn (~10.4 bp)
+windows_95_helical <- merge_windows(obs_enrichment$fragment_length[obs_enrichment$sig_95], gap_fill = 12)
+windows_99_helical <- merge_windows(obs_enrichment$fragment_length[obs_enrichment$sig_99], gap_fill = 12)
+
+cat("=== 95th pct, gap-fill 2 bp ===\n"); print(windows_95_narrow)
+cat("\n=== 95th pct, gap-fill 12 bp (helical) ===\n"); print(windows_95_helical)
+cat("\n=== 99th pct, gap-fill 2 bp ===\n"); print(windows_99_narrow)
+cat("\n=== 99th pct, gap-fill 12 bp (helical) ===\n"); print(windows_99_helical)
+
+write_tsv(windows_95_narrow,  "data/windows_95_narrow.tsv")
+write_tsv(windows_95_helical, "data/windows_95_helical.tsv")
+write_tsv(windows_99_narrow,  "data/windows_99_narrow.tsv")
+write_tsv(windows_99_helical, "data/windows_99_helical.tsv")
+#+end_src
+
+*** Candidate windows
+
+Permutation testing (5000×, per-bin 95th percentile threshold) identifies 59 significant bins spanning 55–130 bp. With a strict gap-fill (≤ 2 bp), three discrete windows emerge:
+
+| Window | Start | End | Width | n sig bins | Notes                            |
+|--------+-------+-----+-------+------------+----------------------------------|
+| W1     |    55 |  83 |    29 |         29 | Primary sub-nucleosomal window   |
+| W2     |    94 | 119 |    26 |         24 | Secondary sub-nucleosomal window |
+| W3     |   125 | 130 |     6 |          6 | Small; at enrichment curve edge  |
+
+At the 99th percentile, W1 contracts to 63–80 bp (18 bp, 17 sig bins); W2 and W3 fragment into 2–3 bin clusters too small to act on individually.
+
+Selection frequency decays monotonically from W1 through W3. W1 contains the peak selection frequency (0.949 at 75 bp); W2 bins are lower; W3 barely clears threshold. This gradient reflects the nucleosome unwrapping mechanism. At 55–83 bp, healthy cfDNA produces almost no fragments because cuts this deep into the wrapped region require substantial chromatin disruption. The denominator (p_healthy) is near zero, so even modest ctDNA production yields a large, stable enrichment ratio. As fragment length approaches the mononucleosome protection length (~147 bp), both cancer and healthy cells produce abundant fragments, and the ratio converges toward 1.0. The gradient is continuous because nucleosome unwrapping is continuous: the outer wrap (~20 bp at each entry/exit) peels off first, producing ~125–145 bp fragments in both groups, while fragments below ~85 bp require loss of most of the wrap, which is specific to disrupted chromatin in cancer [cite:@snyder2016;@cristiano2019]. This gradient validates the nucleosome-mediated mechanism; random degradation would produce uniform enrichment across the sub-nucleosomal range.
+
+The ~10 bp gaps between W1–W2 and W2–W3 coincide with the DNA helical repeat (~10.4 bp). At gap positions, both cancer and healthy samples have similar cleavage accessibility, suppressing the enrichment ratio below threshold. The gaps are geometric artifacts of [[id:359f3390-1e3c-43fe-93c4-4d0c6d8c87d9][helical structure]], not true absence of enrichment.
+
+This periodicity could justify merging W1 and W2 into a single 55–130 bp window (gap-fill = 12 bp, one helical turn). However, the bootstrap data do not support merging: selection frequency at gap positions (84–93 bp) drops to 0.19–0.44, well below the 0.70 threshold met by bins within the windows. The dip reflects genuine instability in enrichment at those positions across resamples, not just a narrow threshold effect. The data support three discrete windows.
+
+For downstream validation, four candidate configurations are carried forward:
+
+- *W1 + W2 + W3 (discrete)*: 55–83, 94–119, 125–130 bp. Data-driven windows from permutation and bootstrap.
+- *Conservative (99th pct)*: 63–80 bp. Highest specificity; only the core sub-nucleosomal peak.
+- *Peaks only*: significant bins only (no gap-fill). Tests whether helical peak positions alone carry sufficient ctDNA enrichment for CNA calling.
+- *Mouliere heuristic*: 90–150 bp. Literature reference window for comparison [cite:@mouliere2018a].
+
+Next step is validation: apply each window to held-out samples and compare ichorCNA tumor fraction estimates from filtered vs unfiltered BAMs.
+
+*** ichorCNA Validation
+
+**** Initial results (Lilli, 2026-03)
+
+Lilli applied ichorCNA to the EWS cohort using two approaches: baseline (all fragments) and fragment-filtered (55-130 bp merged window). Fragment filtering performed substantially worse than baseline across all metrics.
+
+| Metric      | Baseline 1Mb | Frag 55-130 1Mb |
+|-------------+--------------+-----------------|
+| AUC         |        0.934 |           0.673 |
+| Sensitivity |        0.852 |           0.630 |
+| Specificity |        0.895 |           0.737 |
+
+Per-sample read counts after fragment filtering ranged from ~125,000 to ~5.1 million, compared to higher depth in unfiltered baseline. Several samples showed tf_frag = 0 where tf_baseline > 0, indicating ichorCNA failed to converge at the reduced depth rather than absence of tumor signal.
+
+**** Coverage-enrichment tradeoff
+
+Fragment length filtering operates on two opposing axes. Restricting to short fragments enriches the ctDNA proportion (numerator effect) but discards the majority of sequencing reads (denominator effect). At ULP-WGS depths (~0.1-1× genome coverage), the 55-130 bp window retains only 5-20% of total reads. This coverage loss exceeds the enrichment benefit for CNA-based tumor fraction estimation.
+
+ichorCNA requires sufficient read density per genomic bin to distinguish copy number states from Poisson counting noise. Below approximately 50-100 reads per 1 Mb bin, the signal-to-noise ratio for segmentation degrades below the detection threshold regardless of ctDNA enrichment.
+
+Diagnostic outputs from ichorCNA that indicate depth insufficiency: log-likelihood of the fitted model (lower = worse fit), number of segments (too many = noise-driven breakpoints; too few = inability to resolve signal), per-bin corrected read counts, and convergence of tumor fraction and subclone fraction estimates.
+
+**** SNR model
+
+The coverage-enrichment tradeoff can be formalized. ichorCNA detects CNA-driven read depth deviations per genomic bin. Signal per bin scales linearly with tumor fraction and CNA amplitude, proportional to reads in that bin. Noise scales as the square root of reads (Poisson counting statistics).
+
+For unfiltered baseline:
+
+SNR_baseline ∝ TF × A × √N
+
+where TF is tumor fraction, A is CNA amplitude, and N is total reads per bin.
+
+With fragment length window filtering, two quantities change: effective tumor fraction increases by the enrichment factor e(w), and reads per bin decrease to N × r(w), where r(w) is the fraction of reads retained by window w.
+
+SNR_filtered ∝ TF × e(w) × A × √(N × r(w))
+
+Fragment filtering improves SNR when SNR_filtered > SNR_baseline, which simplifies to:
+
+*e(w) × √r(w) > 1*
+
+This is the breakeven condition. If the window retains 10% of reads (r = 0.1), enrichment must exceed 1/√0.1 ≈ 3.16× to produce a net benefit. For 5% retention, the threshold is 4.47×.
+
+The full model incorporates: total sequencing depth (N), CNA amplitude distribution across the genome, bin size (1 Mb vs 500 kb), number of CNA-affected bins, GC bias correction residuals (non-Poisson noise), and mappability-filtered bin fraction. Both e(w) and r(w) are empirically measurable from existing data without additional sequencing.
+
+**** Next steps
+- Compute empirical e(w) and r(w) per sample from existing BAMs to test the breakeven condition directly.
+- Matched-reads comparison: downsample baseline BAMs to match filtered read counts per sample, run ichorCNA on both. Isolates enrichment from coverage as variables.
+- Coverage decay curve: compute r(w) for progressively wider windows (55-130, 55-150, 55-170, 55-200) to characterize the tradeoff inflection.
+- Examine per-sample results at higher depth: ES079 (tf_baseline 0.1247 → tf_frag 0.4501, 3.6× enrichment) and ES056 suggest enrichment may dominate at sufficient depth.
+- Extract ichorCNA loglik and per-bin read counts for both runs to confirm depth insufficiency as the mechanism.
+- Consider alternative applications that avoid coverage loss: weighted fragment length scoring (no BAM filtering), fragment length profile as an independent biomarker combined with full-depth CNA, or deeper sequencing (the existing 50× WGS CCR dataset as a testbed).
+
+*** References
+
+#+print_bibliography:
+
+*** Limitations and statistical critiques                          :noexport:
+
+**** Enrichment ratio instability at small denominators
+The enrichment ratio p_cancer / p_healthy is unstable when p_healthy approaches zero (55–83 bp range). Inflated ratios at these lengths may reflect sampling noise or sequencing recovery bias rather than biological enrichment. The bootstrap partially controls this (unstable ratios produce low selection frequency), and 0.949 selection frequency at 75 bp across 1000 resamples argues the signal is real. Alternatives to consider: log-ratio with pseudocount, difference in proportions, or beta-binomial modeling. Log-ratio was rejected because log(0) is undefined and pseudocount choice is arbitrary, but difference-in-proportions would be straightforward.
+
+**** Multiple testing across 401 bins
+Per-bin permutation at 95th percentile does not control family-wise error rate or FDR. Expected false positives under the null: 401 × 0.05 ≈ 20 bins. We observe 59, exceeding expectation, but formal FDR is unknown. Fixes: Benjamini-Hochberg on permutation-derived p-values, or max-statistic correction (use the maximum enrichment across all bins under each permutation as the null, rather than per-bin thresholds independently).
+
+**** Autocorrelation between adjacent bins
+Fragment length bins are not independent; a sample producing many 75 bp fragments will also produce many 74 bp and 76 bp fragments. Per-bin independence assumption inflates the apparent number of significant bins. Cluster-based permutation testing (test whether contiguous runs of significant bins exceed chance, analogous to cluster mass permutation in neuroimaging) would be more appropriate. The three discrete windows may still survive this correction, but formal cluster significance has not been computed.
+
+**** Denominator gradient vs. unwrapping mechanism
+The monotonic decay of selection frequency from W1 to W3 could be a mathematical artifact of the healthy denominator increasing toward the mononucleosome peak, rather than a biological gradient of nucleosome unwrapping. These explanations are not mutually exclusive: the biophysics predicts the denominator gradient (healthy nucleosomes are intact, so short fragments are rare), so the "artifact" IS the biological signal. But the interpretation should be framed carefully to avoid overclaiming a validated unwrapping mechanism when the data show a ratio gradient that is consistent with, but does not prove, the unwrapping model.
+
+*** Ideas                                                          :noexport:
+**** GC diagnostic (not yet implemented)
+Before skipping GC correction, compute the Pearson correlation between fragment GC content and fragment length in tumor samples and in healthy samples. Similar correlations confirm GC correction is unnecessary. Divergent correlations warrant IPW weighting.
+
+**** Validation plan
+Nested cross-validation for real data:
+1. *Outer fold.* Hold out test samples.
+2. *Inner fold.* Run full pipeline on training samples only to derive windows.
+3. *Evaluate.* Apply windows to held-out test samples. Compare ichorCNA tumor fraction estimates from filtered vs unfiltered BAMs.
+
+Primary metric: ichorCNA tumor fraction (filtered vs unfiltered). Secondary metric: AUROC for tumor vs healthy classification using fragment fraction within windows.
+
+Not yet implemented: nested CV wrapper, GC-length correlation diagnostic, integration with BAM filtering and ichorCNA execution.
+
+**** Open questions
+- Optimal smoothing bandwidth: currently fixed at 5 bp; could be tuned.
+- γ threshold selection: currently 0.80; no principled selection criterion; sensitivity analysis is included.
+- Multi-window priority: pipeline supports disjoint windows but does not rank them if multiple emerge.
+- Cancer-type specificity: windows may differ by cancer type; current approach assumes pan-cancer applicability.
+
+*** Method                                                         :noexport:
+
+**** Notation and frequency normalization
+
+For each sample $i$, fragments are counted into 1 bp bins spanning 50–450 bp, yielding count vector $c_{i,j}$ where $j$ indexes fragment length. Counts are converted to relative frequencies:
+
+\[ p_{i,j} = \frac{c_{i,j}}{\sum_{k} c_{i,k}} \]
+
+This normalization removes sequencing depth as a confounder. Cohort means are computed within each group:
+
+\[ \bar{p}_j^C = \frac{1}{n_C}\sum_{i \in C} p_{i,j}, \qquad \bar{p}_j^H = \frac{1}{n_H}\sum_{i \in H} p_{i,j} \]
+
+where $C$, $H$ are the cancer and healthy sample sets and $n_C$, $n_H$ their sizes.
+
+**** Enrichment
+
+The enrichment ratio at each bin is:
+
+\[ E_j = \frac{\bar{p}_j^C + \varepsilon}{\bar{p}_j^H + \varepsilon}, \quad \varepsilon = 10^{-8} \]
+
+$E_j > 1$ indicates cancer enrichment; $E_j < 1$ indicates healthy enrichment. No smoothing is applied; the ratio is computed on raw bin frequencies.
+
+**** Permutation null (per-bin)
+
+For $R = 5000$ permutations, cancer/healthy labels are shuffled while preserving group sizes. The enrichment ratio is recomputed under each permutation, yielding a null distribution $\{ E_j^{(r)} \}_{r=1}^{R}$ at each bin independently. Per-bin thresholds are:
+
+\[ \tau_j^{95} = \mathrm{quantile}_{0.95}\!\left\{ E_j^{(1)}, \ldots, E_j^{(R)} \right\}, \qquad \tau_j^{99} = \mathrm{quantile}_{0.99}\!\left\{ E_j^{(1)}, \ldots, E_j^{(R)} \right\} \]
+
+A bin is significant if $E_j > \tau_j^{95}$ (or $\tau_j^{99}$). This per-bin approach accounts for length-dependent variance in the null; longer bins have fewer counts and wider null distributions.
+
+**** Bootstrap stability
+
+For $B = 1000$ replicates, cancer and healthy sample IDs are resampled with replacement. The selection frequency at each bin is the fraction of replicates in which the bootstrapped enrichment exceeds the per-bin 95th percentile threshold:
+
+\[ f_j = \frac{1}{B}\sum_{b=1}^{B} \mathbf{1}\!\left[E_j^{(b)} > \tau_j^{95}\right] \]
+
+$f_j \approx 1$ indicates reproducible enrichment; $f_j \approx 0$ indicates noise or outlier-driven signal; $f_j \approx 0.5$ indicates insufficient power.
+
+**** Window definition
+
+Significant bins ($E_j > \tau_j^{95}$) are merged into contiguous windows with a gap-fill of ≤ 2 bp. Bootstrap stability $f_j$ is reported as a diagnostic alongside each window but is not used as a selection gate given its sensitivity to sample size.
+
+**** Design rationale
+
+| Decision            | Choice                    | Rationale                                                    |
+|---------------------+---------------------------+--------------------------------------------------------------|
+| Bin resolution      | 1 bp                      | Maximizes resolution                                         |
+| Enrichment metric   | Ratio (not log-ratio)     | Interpretable as fold-change; symmetric null under shuffling |
+| Smoothing           | None                      | Preserves per-bin permutation validity                       |
+| Permutation type    | Per-bin percentile        | Accounts for length-dependent null variance                  |
+| R (permutations)    | 5000                      | ~50 tail observations at 99th pct; stable threshold          |
+| B (bootstrap)       | 1000                      | Adequate SE at observed selection frequencies                |
+| GC correction       | Skipped (with diagnostic) | Verify via GC-length correlation before correcting           |
+| Tumor sample filter | ctDNA ≥ some threshold    | Low-ctDNA samples dilute signal; threshold is study-specific |
+| Validation          | Held-out samples          | Windows derived from data cannot be validated on same data   |
 
 ** Development                                                          :dev:
 *** TODO Integrate [[https://github.com/alexcpan/nf1_fragmentomics][nf1_fragmentomics]]
