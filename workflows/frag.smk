@@ -4,7 +4,7 @@
 # 
 # Source:  /home/jeszyman/repos/frag/frag.org
 # Author:  Jeffrey Szymanski
-# Tangled: 2026-03-13 15:30:47
+# Tangled: 2026-03-13 16:35:03
 # ============================================================
 
 #########1#########2#########3#########4#########5#########6#########7#########8
@@ -613,4 +613,80 @@ rule frag_plot_arm_zscore_heatmap:
         mkdir -p "$(dirname {output.pdf})"
         Rscript scripts/plot_arm_zscore_heatmap.R \
           "{input.csv}" "{output.pdf}"
+        """
+rule frag_nmf_length_features:
+    message:
+        "NMF decomposition of fragment length frequency matrix"
+    conda:
+        CONDA_FRAG
+    input:
+        freq = f"{D_FRAG}/histograms/{{ref_name}}.freq_histogram.csv",
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_nmf_{{n_components}}_frag_nmf_length_features.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_nmf_{{n_components}}_frag_nmf_length_features.tsv"
+    threads:
+        1
+    output:
+        w = f"{D_FRAG}/features/{{ref_name}}.nmf_{{n_components}}.W.csv",
+        h = f"{D_FRAG}/features/{{ref_name}}.nmf_{{n_components}}.H.csv",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[nmf_length] $(date) ref={wildcards.ref_name} k={wildcards.n_components}"
+
+        mkdir -p "$(dirname {output.w})"
+        python3 scripts/frag_nmf_length_features.py \
+          "{input.freq}" {wildcards.n_components} "{output.w}" "{output.h}"
+        """
+rule frag_motif_diversity:
+    message:
+        "Compute motif diversity score (Shannon entropy)"
+    conda:
+        CONDA_FRAG
+    input:
+        tsv = f"{D_FRAG}/motifs/{{ref_name}}.all_motifs.tsv",
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_motif_diversity.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_frag_motif_diversity.tsv"
+    threads:
+        1
+    output:
+        csv = f"{D_FRAG}/features/{{ref_name}}.motif_diversity.csv",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[motif_diversity] $(date) ref={wildcards.ref_name}"
+
+        mkdir -p "$(dirname {output.csv})"
+        Rscript scripts/frag_motif_diversity.R \
+          "{input.tsv}" "{output.csv}"
+        """
+rule frag_fprofiles:
+    message:
+        "Compute F-profiles (NMF + NNLS on end motifs)"
+    conda:
+        CONDA_FRAG
+    input:
+        tsv = f"{D_FRAG}/motifs/{{ref_name}}.all_motifs.tsv",
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_fprofiles.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_frag_fprofiles.tsv"
+    params:
+        n_components = config.get("fprofiles", {}).get("n_components", 6),
+    threads:
+        1
+    output:
+        fprof = f"{D_FRAG}/features/{{ref_name}}.fprofiles.tsv",
+        motif_per_fprof = f"{D_FRAG}/features/{{ref_name}}.motif_per_fprofile.tsv",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[fprofiles] $(date) ref={wildcards.ref_name} k={params.n_components}"
+
+        mkdir -p "$(dirname {output.fprof})"
+        python3 scripts/frag_fprofiles.py \
+          "{input.tsv}" {params.n_components} "{output.fprof}" "{output.motif_per_fprof}"
         """

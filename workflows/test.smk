@@ -4,7 +4,7 @@
 # 
 # Source:  /home/jeszyman/repos/frag/frag.org
 # Author:  Jeffrey Szymanski
-# Tangled: 2026-03-13 15:30:47
+# Tangled: 2026-03-13 16:35:03
 # ============================================================
 
 # CFDNA FRAGMENTOMICS FULL PIPELINE TEST WRAPPER SNAKEFILE
@@ -48,6 +48,8 @@ CONDA_FRAG = config["conda"]["frag"]
 frag_ref_names = ["chr22"]
 
 FRAG_HEALTHY_LIBRARIES = config.get("healthy_libraries", [])
+
+NMF_N_COMPONENTS = config.get("nmf", {}).get("n_components", 2)
 
 # ------------------------------------------------------------------------------
 # Load Tabular Configuration
@@ -209,6 +211,21 @@ rule all:
         ),
         expand(
             f"{D_FRAG}/qc/{{ref_name}}.arm_zscore_heatmap.pdf",
+            ref_name=frag_ref_names,
+        ),
+        # NMF fragment length features
+        expand(
+            f"{D_FRAG}/features/{{ref_name}}.nmf_{NMF_N_COMPONENTS}.W.csv",
+            ref_name=frag_ref_names,
+        ),
+        # Motif diversity score
+        expand(
+            f"{D_FRAG}/features/{{ref_name}}.motif_diversity.csv",
+            ref_name=frag_ref_names,
+        ),
+        # F-profiles
+        expand(
+            f"{D_FRAG}/features/{{ref_name}}.fprofiles.tsv",
             ref_name=frag_ref_names,
         ),
 

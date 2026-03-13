@@ -223,6 +223,8 @@ dependencies:
   - r-data.table
   - r-tidyverse
   - samtools
+  - scikit-learn
+  - scipy
   - snakemake
 #+end_src
 
@@ -1118,19 +1120,18 @@ out_tsv  <- args[2]
 start_bp <- as.integer(args[3])
 end_bp   <- as.integer(args[4])
 
-library(tidyverse)
+library(data.table)
 
-frags <- read_tsv(frag_bed, col_names = c("chr", "start", "end", "gc", "length"),
-                  col_types = "ciidi")
+frags <- fread(frag_bed, col.names = c("chr", "start", "end", "gc", "length"))
 
-hist_df <- frags %>%
-  filter(length >= start_bp, length <= end_bp) %>%
-  count(length, name = "count") %>%
-  right_join(tibble(length = start_bp:end_bp), by = "length") %>%
-  replace_na(list(count = 0L)) %>%
-  arrange(length)
+hist_dt <- frags[length >= start_bp & length <= end_bp, .N, by = length]
+setnames(hist_dt, "N", "count")
+all_lengths <- data.table(length = start_bp:end_bp)
+hist_dt <- merge(all_lengths, hist_dt, by = "length", all.x = TRUE)
+hist_dt[is.na(count), count := 0L]
+setorder(hist_dt, length)
 
-write_tsv(hist_df, out_tsv)
+fwrite(hist_dt, out_tsv, sep = "\t")
 #+end_src
 
 **** Frequency matrix
@@ -1630,6 +1631,225 @@ p <- ggplot(armz_long, aes(x = arm, y = library, fill = z)) +
 ggsave(output_pdf, p, width = plot_width, height = plot_height)
 #+end_src
 
+*** NMF features
+**** NMF fragment length decomposition
+Non-negative matrix factorization on fragment length frequency matrix. Decomposes the samples x lengths matrix into W (samples x components) and H (components x lengths). W columns are per-sample NMF features; H rows are learned fragment length signatures. Adapted from candetect_cfdna_pipeline =nmf_model.py= (sklearn NMF with KL divergence, multiplicative update solver).
+
+#+begin_src snakemake
+rule frag_nmf_length_features:
+    message:
+        "NMF decomposition of fragment length frequency matrix"
+    conda:
+        CONDA_FRAG
+    input:
+        freq = f"{D_FRAG}/histograms/{{ref_name}}.freq_histogram.csv",
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_nmf_{{n_components}}_frag_nmf_length_features.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_nmf_{{n_components}}_frag_nmf_length_features.tsv"
+    threads:
+        1
+    output:
+        w = f"{D_FRAG}/features/{{ref_name}}.nmf_{{n_components}}.W.csv",
+        h = f"{D_FRAG}/features/{{ref_name}}.nmf_{{n_components}}.H.csv",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[nmf_length] $(date) ref={wildcards.ref_name} k={wildcards.n_components}"
+
+        mkdir -p "$(dirname {output.w})"
+        python3 scripts/frag_nmf_length_features.py \
+          "{input.freq}" {wildcards.n_components} "{output.w}" "{output.h}"
+        """
+#+end_src
+
+#+begin_src python :tangle ./scripts/frag_nmf_length_features.py
+#!/usr/bin/env python3
+"""NMF decomposition of fragment length frequency matrix.
+
+Produces W (samples x components) and H (components x lengths) matrices.
+Uses KL divergence with multiplicative update solver (Renaud 2022).
+"""
+import sys
+import numpy as np
+import pandas as pd
+from sklearn.decomposition import NMF
+
+freq_csv = sys.argv[1]
+n_components = int(sys.argv[2])
+out_w = sys.argv[3]
+out_h = sys.argv[4]
+
+freq_mat = pd.read_csv(freq_csv, index_col=0)
+
+nmf = NMF(
+    n_components=n_components,
+    init="random",
+    random_state=42,
+    solver="mu",
+    beta_loss="kullback-leibler",
+    max_iter=5000,
+)
+W = nmf.fit_transform(freq_mat.values)
+H = nmf.components_
+
+W_df = pd.DataFrame(
+    W,
+    index=freq_mat.index,
+    columns=[f"nmf_{i+1}" for i in range(n_components)],
+)
+H_df = pd.DataFrame(
+    H,
+    index=[f"nmf_{i+1}" for i in range(n_components)],
+    columns=freq_mat.columns,
+)
+
+W_df.to_csv(out_w)
+H_df.to_csv(out_h)
+#+end_src
+
+*** Motif-derived features
+**** Motif diversity score
+Shannon entropy on 4-mer end motif frequencies, normalized by log(256). Produces a single summary statistic per library quantifying motif diversity. Adapted from candetect_cfdna_pipeline =motif_diversity_score.R=.
+
+#+begin_src snakemake
+rule frag_motif_diversity:
+    message:
+        "Compute motif diversity score (Shannon entropy)"
+    conda:
+        CONDA_FRAG
+    input:
+        tsv = f"{D_FRAG}/motifs/{{ref_name}}.all_motifs.tsv",
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_motif_diversity.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_frag_motif_diversity.tsv"
+    threads:
+        1
+    output:
+        csv = f"{D_FRAG}/features/{{ref_name}}.motif_diversity.csv",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[motif_diversity] $(date) ref={wildcards.ref_name}"
+
+        mkdir -p "$(dirname {output.csv})"
+        Rscript scripts/frag_motif_diversity.R \
+          "{input.tsv}" "{output.csv}"
+        """
+#+end_src
+
+#+begin_src R :tangle ./scripts/frag_motif_diversity.R
+#!/usr/bin/env Rscript
+# Motif diversity score: Shannon entropy normalized by log(256).
+# Uses data.table for efficient I/O.
+
+args <- commandArgs(trailingOnly = TRUE)
+motif_tsv  <- args[1]
+output_csv <- args[2]
+
+library(data.table)
+
+motifs <- fread(motif_tsv)
+lib_cols <- names(motifs)[-1]
+
+mds_list <- lapply(lib_cols, function(lib) {
+  fracs <- motifs[[lib]]
+  fracs[is.na(fracs)] <- 0
+  fracs[fracs == 0] <- 1e-10
+  data.table(library = lib, mds = -sum(fracs * log(fracs)) / log(256))
+})
+
+mds_dt <- rbindlist(mds_list)
+fwrite(mds_dt, output_csv)
+#+end_src
+
+**** F-profiles
+NMF decomposition on end motif frequencies followed by NNLS deconvolution. Learns 6 latent motif signatures (F-profiles) and quantifies each library's contribution to each signature. Adapted from candetect_cfdna_pipeline =fprofiles.py=.
+
+#+begin_src snakemake
+rule frag_fprofiles:
+    message:
+        "Compute F-profiles (NMF + NNLS on end motifs)"
+    conda:
+        CONDA_FRAG
+    input:
+        tsv = f"{D_FRAG}/motifs/{{ref_name}}.all_motifs.tsv",
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_fprofiles.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_frag_fprofiles.tsv"
+    params:
+        n_components = config.get("fprofiles", {}).get("n_components", 6),
+    threads:
+        1
+    output:
+        fprof = f"{D_FRAG}/features/{{ref_name}}.fprofiles.tsv",
+        motif_per_fprof = f"{D_FRAG}/features/{{ref_name}}.motif_per_fprofile.tsv",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[fprofiles] $(date) ref={wildcards.ref_name} k={params.n_components}"
+
+        mkdir -p "$(dirname {output.fprof})"
+        python3 scripts/frag_fprofiles.py \
+          "{input.tsv}" {params.n_components} "{output.fprof}" "{output.motif_per_fprof}"
+        """
+#+end_src
+
+#+begin_src python :tangle ./scripts/frag_fprofiles.py
+#!/usr/bin/env python3
+"""F-profile decomposition of end motif frequencies.
+
+NMF learns latent motif signatures, then NNLS deconvolves each sample's
+motif profile into F-profile contributions (percentages summing to 100).
+"""
+import sys
+import numpy as np
+import pandas as pd
+from sklearn.decomposition import NMF
+from scipy.optimize import nnls
+
+motif_tsv = sys.argv[1]
+n_components = int(sys.argv[2])
+out_fprof = sys.argv[3]
+out_motif_per_fprof = sys.argv[4]
+
+motifs_df = pd.read_csv(motif_tsv, sep="\t").fillna(0)
+M = motifs_df.iloc[:, 1:].astype(float).T  # samples x motifs
+
+n_components = min(n_components, M.shape[0], M.shape[1])
+
+nmf = NMF(
+    n_components=n_components,
+    init="random",
+    random_state=42,
+    max_iter=100000,
+)
+W = nmf.fit_transform(M)
+F = nmf.components_  # components x motifs
+
+# NNLS deconvolution per sample
+nnls_df = pd.DataFrame()
+for lib in motifs_df.columns[1:]:
+    sample_freqs = motifs_df[lib].values.astype(float)
+    P, _ = nnls(F.T, sample_freqs)
+    total = np.sum(P)
+    nnls_df[lib] = 100 * P / total if total > 0 else P
+
+nnls_df.index = [f"fprof{i+1}" for i in range(F.shape[0])]
+nnls_df.to_csv(out_fprof, sep="\t")
+
+# Normalized motif profiles per F-profile
+F_norm = F / F.sum(axis=1, keepdims=True)
+F_df = pd.DataFrame(
+    F_norm,
+    columns=motifs_df.iloc[:, 0],
+    index=[f"fprof{i+1}" for i in range(F.shape[0])],
+)
+F_df.to_csv(out_motif_per_fprof, sep="\t")
+#+end_src
+
 ** Testing
 *** Test data provenance
 Test data is paired-end WGS (whole-genome sequencing) of cell-free DNA, not EM-seq or bisulfite-seq. Samples are from [[https://www.ncbi.nlm.nih.gov/bioproject/PRJNA326698][PRJNA326698]] (Snyder et al. 2016, /Cell/), downloaded from NCBI SRA.
@@ -1824,6 +2044,12 @@ end_motif:
   n_reads: 1000
   seed: 42
 
+nmf:
+  n_components: 2
+
+fprofiles:
+  n_components: 6
+
 #+end_src
 
 *** Test wrapper
@@ -1870,6 +2096,8 @@ CONDA_FRAG = config["conda"]["frag"]
 frag_ref_names = ["chr22"]
 
 FRAG_HEALTHY_LIBRARIES = config.get("healthy_libraries", [])
+
+NMF_N_COMPONENTS = config.get("nmf", {}).get("n_components", 2)
 
 # ------------------------------------------------------------------------------
 # Load Tabular Configuration
@@ -2031,6 +2259,21 @@ rule all:
         ),
         expand(
             f"{D_FRAG}/qc/{{ref_name}}.arm_zscore_heatmap.pdf",
+            ref_name=frag_ref_names,
+        ),
+        # NMF fragment length features
+        expand(
+            f"{D_FRAG}/features/{{ref_name}}.nmf_{NMF_N_COMPONENTS}.W.csv",
+            ref_name=frag_ref_names,
+        ),
+        # Motif diversity score
+        expand(
+            f"{D_FRAG}/features/{{ref_name}}.motif_diversity.csv",
+            ref_name=frag_ref_names,
+        ),
+        # F-profiles
+        expand(
+            f"{D_FRAG}/features/{{ref_name}}.fprofiles.tsv",
             ref_name=frag_ref_names,
         ),
 
