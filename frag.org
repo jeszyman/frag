@@ -198,6 +198,7 @@ main "$@"
 :END:
 **** Change Log
 - Development since last tag
+  - [2026-03-13 Thu] Migrated feature extraction from nf1_fragmentomics: 7 new rules (fragment length histograms, DELFI arm z-scores, ratio row-normalization, 3 QC plots). All R, no Picard dependency. Pipeline now 22 rules, 33 test steps pass.
   - [2026-03-13 Thu] Restored `** Fragment Length Window Optimization` (dropped by restructure moonshot). Added `*** ichorCNA Validation` with initial results, coverage-enrichment tradeoff, SNR breakeven model, and next steps. Updated career.org project heading with 4-phase plan.
   - [2026-03-12 Thu] Fixed pipeline: gc_map_bins (windowing+GC), count_merge (filename parsing), conda env (removed name:), documented test data provenance (WGS cfDNA, PRJNA326698)
   - [2026-03-12 Wed] Restructured to biopipe module pattern; migrated fragment length (GC normalization chain) and end motif pipelines from [[https://github.com/jeszyman/cfdna][cfdna]] (now archived) into =workflows/frag.smk= (16 =frag_=-prefixed rules)
