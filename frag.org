@@ -198,6 +198,7 @@ main "$@"
 :END:
 **** Change Log
 - Development since last tag
+  - [2026-03-13 Thu] Migrated from candetect/delfi: NMF fragment length features (sklearn), F-profiles (NMF+NNLS on motifs), motif diversity score (Shannon entropy). Added scikit-learn+scipy to conda env. Switched frag_length_hist.R to data.table for efficiency. Pipeline now 25 rules, 36 test steps.
   - [2026-03-13 Thu] Migrated feature extraction from nf1_fragmentomics: 7 new rules (fragment length histograms, DELFI arm z-scores, ratio row-normalization, 3 QC plots). All R, no Picard dependency. Pipeline now 22 rules, 33 test steps pass.
   - [2026-03-13 Thu] Restored `** Fragment Length Window Optimization` (dropped by restructure moonshot). Added `*** ichorCNA Validation` with initial results, coverage-enrichment tradeoff, SNR breakeven model, and next steps. Updated career.org project heading with 4-phase plan.
   - [2026-03-12 Thu] Fixed pipeline: gc_map_bins (windowing+GC), count_merge (filename parsing), conda env (removed name:), documented test data provenance (WGS cfDNA, PRJNA326698)
