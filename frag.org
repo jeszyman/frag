@@ -1,4 +1,5 @@
 * Cell-free DNA Fragmentomics Analysis                              :biopipe:
+- [ ] could probably go a little heavier on data size to test
 ** [[id:339b69f6-6c09-4e9d-a2ec-27bdf5747163][README]]
 ** Repository setup and administration
 *** Org update
@@ -486,6 +487,7 @@ bedtools bamtobed -bedpe -i "$input_bam" \
 
 *** Fragment length
 **** GC and mappability restricted bins
+
 #+begin_src snakemake
 rule frag_gc_map_bins:
     message:
@@ -3051,3 +3053,6 @@ Significant bins ($E_j > \tau_j^{95}$) are merged into contiguous windows with a
 - multimappers in bedtools would need a CIGAR filt (no flag) https://www.biostars.org/p/239772/
 - make hg38 gc filter https://stackoverflow.com/questions/8551349/how-to-sum-up-every-10-lines-and-calculate-average-using-awk
 - mappability https://bismap.hoffmanlab.org/
+- MAD <0.20 QC threshold and 5 ng minimum cfDNA input are validated benchmarks for sWGS QC [cite:@ricklesyoung2024]
+- CNLOH blind spot: NF1 loss can involve CNLOH, which causes ichorCNA to underestimate TFx — relevant for MPNST samples [cite:@ricklesyoung2024]
+- Panel-of-normal from 20 healthy donors shown sufficient for ichorCNA — reference point for own PoN adequacy [cite:@ricklesyoung2024]
