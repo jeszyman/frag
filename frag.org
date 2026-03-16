@@ -2972,6 +2972,7 @@ Fragment length bins are not independent; a sample producing many 75 bp fragment
 The monotonic decay of selection frequency from W1 to W3 could be a mathematical artifact of the healthy denominator increasing toward the mononucleosome peak, rather than a biological gradient of nucleosome unwrapping. These explanations are not mutually exclusive: the biophysics predicts the denominator gradient (healthy nucleosomes are intact, so short fragments are rare), so the "artifact" IS the biological signal. But the interpretation should be framed carefully to avoid overclaiming a validated unwrapping mechanism when the data show a ratio gradient that is consistent with, but does not prove, the unwrapping model.
 
 *** Ideas                                                          :noexport:
+- [[id:28f0b200-7052-424f-a9ff-35e3c6234efb][Cross-modal methylation-fragmentomics enrichment (career.org)]]
 **** GC diagnostic (not yet implemented)
 Before skipping GC correction, compute the Pearson correlation between fragment GC content and fragment length in tumor samples and in healthy samples. Similar correlations confirm GC correction is unnecessary. Divergent correlations warrant IPW weighting.
 
@@ -3048,8 +3049,18 @@ Significant bins ($E_j > \tau_j^{95}$) are merged into contiguous windows with a
 | Validation          | Held-out samples          | Windows derived from data cannot be validated on same data   |
 
 ** Development                                                          :dev:
+*** TODO Add epigenetic hotspot coverage features
+cfDNA coverage at genomic regions with high density of epigenetic marks (H3K4me1, H3K4me3, H3K27ac, H3K36me3, etc.) provides signal complementary to fragment length ratios and end motifs. Annapragada et al. 2026 [cite:@annapragada2026] used 551 1-Mb bins with high-density epigenetic mark representation as features in their PLR classifier for liver fibrosis/cirrhosis detection. The DELFI3 pipeline ([[https://github.com/cancer-genomics/delfi3][cancer-genomics/delfi3]]) computes these as part of its =02_EpigeneticBins= module within the Artemis pipeline.
+
+Implementation path:
+- Obtain the 551 epigenetic hotspot bin coordinates (likely in Annapragada 2026 supplementary data files S17/S19, or derive from ENCODE/Roadmap chromatin mark data)
+- Compute GC-corrected cfDNA coverage in these bins — reuse existing bin coverage infrastructure from DELFI features (the pipeline already computes per-bin fragment counts with GC correction)
+- Output: 551-dimensional feature vector per sample (normalized coverage at epigenetic hotspot bins)
+- This is a low-effort addition since the frag pipeline already computes per-bin coverage in 5-Mb bins; this just adds a parallel set of 1-Mb epigenetic bins
+
 *** TODO Integrate [[https://github.com/alexcpan/nf1_fragmentomics][nf1_fragmentomics]]
 *** Ideas
+- Fragmentome comorbidity index (FCMI) as confounder: Annapragada et al. 2026 showed cfDNA fragmentomes reflect general disease burden (high vs low Charlson Comorbidity Index, HR 1.86 for survival). In cancer fragmentomics classifiers, patients with high non-cancer comorbidity burden may have shifted baseline fragmentomes that confound cancer-specific signal. Consider including CCI as a covariate or computing an FCMI-like score to regress out morbidity signal before cancer classification — especially relevant for NF1 cohorts with variable non-malignant disease burden (plexiform neurofibromas, other NF1 manifestations) [cite:@annapragada2026]
 - multimappers in bedtools would need a CIGAR filt (no flag) https://www.biostars.org/p/239772/
 - make hg38 gc filter https://stackoverflow.com/questions/8551349/how-to-sum-up-every-10-lines-and-calculate-average-using-awk
 - mappability https://bismap.hoffmanlab.org/
