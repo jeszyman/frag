@@ -5,7 +5,7 @@
 # 
 # Source:  /home/jeszyman/repos/frag/frag.org
 # Author:  Jeffrey Szymanski
-# Tangled: 2026-03-13 16:35:03
+# Tangled: 2026-03-24 13:15:21
 # ============================================================
 
 args <- commandArgs(trailingOnly = TRUE)
@@ -21,7 +21,7 @@ distro <- bed %>%
   mutate(gc_strata = round(gc_raw, 2)) %>%
   count(gc_strata) %>%
   mutate(fract_frags = n / sum(n)) %>%
-  mutate(library_id = gsub("_frag.bed", "", gsub("^.*lib", "lib", bed_file))) %>%
+  mutate(library_id = sub("\\.[^.]+\\.frag\\.bed$", "", basename(bed_file))) %>%
   select(library_id, gc_strata, fract_frags)
 
 write.csv(distro, file = distro_file, row.names = FALSE)

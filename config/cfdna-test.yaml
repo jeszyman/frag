@@ -1,0 +1,34 @@
+conda:
+  frag: "${HOME}/repos/frag/config/frag-conda-env.yaml"
+
+directories:
+  inputs: /mnt/data/projects/cfdna/inputs
+  frag: /mnt/data/projects/cfdna/frag
+  logs: /mnt/data/projects/cfdna/frag/logs
+  benchmark: /mnt/data/projects/cfdna/frag/benchmark
+
+sample-tsv-path: ${HOME}/repos/frag/data/cfdna-test-samples.tsv
+
+frag_ref_assemblies:
+  ncbi_hg38:
+    url: ""
+    name: ncbi_hg38
+    input: GCA_000001405.15_GRCh38_no_alt_analysis_set.fa.gz
+
+gc5mb: /mnt/data/projects/cfdna/frag/hg38_regions.bed
+blklist: /mnt/data/projects/cfdna/frag/hg38-blacklist.v2.bed.gz
+cytoband: /mnt/data/projects/cfdna/frag/cytoBand.txt
+
+healthy_libraries:
+  - kh_01
+
+end_motif:
+  n_motif: 4
+  n_reads: 1000000
+  seed: 42
+
+nmf:
+  n_components: 2
+
+fprofiles:
+  n_components: 6

@@ -5,7 +5,7 @@
 # 
 # Source:  /home/jeszyman/repos/frag/frag.org
 # Author:  Jeffrey Szymanski
-# Tangled: 2026-03-13 16:35:03
+# Tangled: 2026-03-24 13:15:21
 # ============================================================
 
 args <- commandArgs(trailingOnly = TRUE)
@@ -21,7 +21,9 @@ possible_motifs <- expand.grid(rep(list(c("A", "G", "T", "C")), 4)) %>%
   arrange(motif)
 
 motif_files <- strsplit(motif_str, " ")[[1]]
-names(motif_files) <- substr(gsub("^.*lib", "lib", motif_files), 1, 6)
+# Extract library_id from {library_id}.{ref_name}.motifs.txt
+names(motif_files) <- basename(motif_files) %>%
+  sub("\\.[^.]+\\.motifs\\.txt$", "", .)
 
 ingest_motif <- function(motif_file) {
   read_tsv(motif_file, col_names = c("motif")) %>%

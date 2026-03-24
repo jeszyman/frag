@@ -5,7 +5,7 @@
 # 
 # Source:  /home/jeszyman/repos/frag/frag.org
 # Author:  Jeffrey Szymanski
-# Tangled: 2026-03-13 16:35:03
+# Tangled: 2026-03-24 13:15:21
 # ============================================================
 
 set -euo pipefail
@@ -31,6 +31,9 @@ forward_motif() {
         | cut -f3 \
         | awk -v nreads="$f_reads" 'BEGIN {total=0} {total += $1} END {print nreads/total}')
 
+    # head causes SIGPIPE (141) upstream under pipefail; write to temp then process
+    local tmpbed
+    tmpbed=$(mktemp)
     samtools view \
         --with-header \
         --min-MQ 60 \
@@ -39,10 +42,12 @@ forward_motif() {
         --subsample-seed "$seed" \
         --threads "$threads" "$in_bam" \
       | bedtools bamtobed -i stdin \
-      | head -n "$n_reads" \
-      | bedtools getfasta -bed stdin -fi "$in_fasta" \
+      | head -n "$n_reads" > "$tmpbed" || true
+
+    bedtools getfasta -bed "$tmpbed" -fi "$in_fasta" \
       | sed "1d; n; d" \
       | sed -E "s/(.{$n_motif}).*/\1/"
+    rm -f "$tmpbed"
 }
 
 reverse_motif() {
@@ -53,6 +58,8 @@ reverse_motif() {
         | cut -f3 \
         | awk -v nreads="$f_reads" 'BEGIN {total=0} {total += $1} END {print nreads/total}')
 
+    local tmpbed
+    tmpbed=$(mktemp)
     samtools view \
         --with-header \
         --min-MQ 60 \
@@ -61,12 +68,14 @@ reverse_motif() {
         --subsample-seed "$seed" \
         --threads "$threads" "$in_bam" \
       | bedtools bamtobed -i stdin \
-      | head -n "$n_reads" \
-      | bedtools getfasta -bed stdin -fi "$in_fasta" \
+      | head -n "$n_reads" > "$tmpbed" || true
+
+    bedtools getfasta -bed "$tmpbed" -fi "$in_fasta" \
       | sed "1d; n; d" \
       | sed -E "s/.*(.{$n_motif})/\1/" \
       | tr ACGT TGCA \
       | rev
+    rm -f "$tmpbed"
 }
 
 forward_motif "$in_bam" "$seed" "$threads" "$n_reads" "$in_fasta" "$n_motif" > "$out_merged"

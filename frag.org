@@ -592,7 +592,7 @@ distro <- bed %>%
   mutate(gc_strata = round(gc_raw, 2)) %>%
   count(gc_strata) %>%
   mutate(fract_frags = n / sum(n)) %>%
-  mutate(library_id = gsub("_frag.bed", "", gsub("^.*lib", "lib", bed_file))) %>%
+  mutate(library_id = sub("\\.[^.]+\\.frag\\.bed$", "", basename(bed_file))) %>%
   select(library_id, gc_strata, fract_frags)
 
 write.csv(distro, file = distro_file, row.names = FALSE)
@@ -976,6 +976,9 @@ forward_motif() {
         | cut -f3 \
         | awk -v nreads="$f_reads" 'BEGIN {total=0} {total += $1} END {print nreads/total}')
 
+    # head causes SIGPIPE (141) upstream under pipefail; write to temp then process
+    local tmpbed
+    tmpbed=$(mktemp)
     samtools view \
         --with-header \
         --min-MQ 60 \
@@ -984,10 +987,12 @@ forward_motif() {
         --subsample-seed "$seed" \
         --threads "$threads" "$in_bam" \
       | bedtools bamtobed -i stdin \
-      | head -n "$n_reads" \
-      | bedtools getfasta -bed stdin -fi "$in_fasta" \
+      | head -n "$n_reads" > "$tmpbed" || true
+
+    bedtools getfasta -bed "$tmpbed" -fi "$in_fasta" \
       | sed "1d; n; d" \
       | sed -E "s/(.{$n_motif}).*/\1/"
+    rm -f "$tmpbed"
 }
 
 reverse_motif() {
@@ -998,6 +1003,8 @@ reverse_motif() {
         | cut -f3 \
         | awk -v nreads="$f_reads" 'BEGIN {total=0} {total += $1} END {print nreads/total}')
 
+    local tmpbed
+    tmpbed=$(mktemp)
     samtools view \
         --with-header \
         --min-MQ 60 \
@@ -1006,12 +1013,14 @@ reverse_motif() {
         --subsample-seed "$seed" \
         --threads "$threads" "$in_bam" \
       | bedtools bamtobed -i stdin \
-      | head -n "$n_reads" \
-      | bedtools getfasta -bed stdin -fi "$in_fasta" \
+      | head -n "$n_reads" > "$tmpbed" || true
+
+    bedtools getfasta -bed "$tmpbed" -fi "$in_fasta" \
       | sed "1d; n; d" \
       | sed -E "s/.*(.{$n_motif})/\1/" \
       | tr ACGT TGCA \
       | rev
+    rm -f "$tmpbed"
 }
 
 forward_motif "$in_bam" "$seed" "$threads" "$n_reads" "$in_fasta" "$n_motif" > "$out_merged"
@@ -1064,7 +1073,9 @@ possible_motifs <- expand.grid(rep(list(c("A", "G", "T", "C")), 4)) %>%
   arrange(motif)
 
 motif_files <- strsplit(motif_str, " ")[[1]]
-names(motif_files) <- substr(gsub("^.*lib", "lib", motif_files), 1, 6)
+# Extract library_id from {library_id}.{ref_name}.motifs.txt
+names(motif_files) <- basename(motif_files) %>%
+  sub("\\.[^.]+\\.motifs\\.txt$", "", .)
 
 ingest_motif <- function(motif_file) {
   read_tsv(motif_file, col_names = c("motif")) %>%
