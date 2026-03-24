@@ -5,7 +5,7 @@
 # 
 # Source:  /home/jeszyman/repos/frag/frag.org
 # Author:  Jeffrey Szymanski
-# Tangled: 2026-03-13 16:35:03
+# Tangled: 2026-03-24 13:15:21
 # ============================================================
 
 set -euo pipefail
@@ -24,7 +24,6 @@ parse_args() {
 
     declare -g blk_url="https://raw.githubusercontent.com/Boyle-Lab/Blacklist/master/lists/hg38-blacklist.v2.bed.gz"
     declare -g ref_url="https://hgdownload.soe.ucsc.edu/goldenPath/hg38/chromosomes/chr22.fa.gz"
-
 
     declare -g fa_head_lines=4000000
     declare -g nreads=60000
