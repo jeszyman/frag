@@ -1,13 +1,4 @@
 #!/usr/bin/env Rscript
-# ============================================================
-# AUTO-GENERATED — DO NOT EDIT DIRECTLY
-# Edits will be overwritten on next org-babel tangle.
-# 
-# Source:  /home/jeszyman/repos/frag/frag.org
-# Author:  Jeffrey Szymanski
-# Tangled: 2026-03-25 10:04:32
-# ============================================================
-
 # Genome-wide DELFI ratio profile plot.
 # One panel per library, ratio.centered across genomic bins.
 
@@ -15,16 +6,21 @@ args <- commandArgs(trailingOnly = TRUE)
 ratios_tsv <- args[1]
 output_pdf <- args[2]
 
-source("~/repos/science/R/figure_schema.R")
-if (!"Arial" %in% names(grDevices::pdfFonts()))
-  theme_scifig <- function(base_size = BASE_SIZE) {
-    theme_bw(base_size = base_size) +
-      theme(text = element_text(family = "Helvetica"),
-            panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
-            strip.background = element_rect(fill = "grey95", colour = NA),
-            legend.background = element_rect(fill = NA), legend.key = element_rect(fill = NA),
-            plot.title = element_blank(), plot.margin = margin(4, 4, 4, 4, "pt"))
-  }
+schema_path <- path.expand("~/repos/science/R/figure_schema.R")
+if (file.exists(schema_path)) {
+  source(schema_path)
+} else {
+  PLOT_DPI <- 300; PLOT_W <- 6; PLOT_H <- 4.5; BASE_SIZE <- 18
+}
+theme_scifig <- function(base_size = BASE_SIZE) {
+  fam <- if ("Arial" %in% names(grDevices::pdfFonts())) "Arial" else "Helvetica"
+  theme_bw(base_size = base_size) +
+    theme(text = element_text(family = fam),
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+          strip.background = element_rect(fill = "grey95", colour = NA),
+          legend.background = element_rect(fill = NA), legend.key = element_rect(fill = NA),
+          plot.title = element_blank(), plot.margin = margin(4, 4, 4, 4, "pt"))
+}
 library(tidyverse)
 
 ratios <- read_tsv(ratios_tsv)
