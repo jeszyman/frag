@@ -2065,7 +2065,7 @@ main "$@"
 #+begin_src yaml :tangle ./config/test.yaml
 
 conda:
-  frag: "${HOME}/repos/frag/config/frag-conda-env.yaml"
+  frag: "../config/frag-conda-env.yaml"
 
 directories:
   inputs: tests/full/inputs
@@ -2073,7 +2073,7 @@ directories:
   logs: tests/logs
   benchmark: tests/benchmark
 
-sample-tsv-path: ${HOME}/repos/frag/data/test-samples.tsv
+sample-tsv-path: data/test-samples.tsv
 
 frag_ref_assemblies:
   chr22:

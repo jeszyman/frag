@@ -1,14 +1,5 @@
-# ============================================================
-# AUTO-GENERATED — DO NOT EDIT DIRECTLY
-# Edits will be overwritten on next org-babel tangle.
-# 
-# Source:  /home/jeszyman/repos/frag/frag.org
-# Author:  Jeffrey Szymanski
-# Tangled: 2026-03-24 13:15:21
-# ============================================================
-
 conda:
-  frag: "${HOME}/repos/frag/config/frag-conda-env.yaml"
+  frag: "../config/frag-conda-env.yaml"
 
 directories:
   inputs: tests/full/inputs
@@ -16,7 +7,7 @@ directories:
   logs: tests/logs
   benchmark: tests/benchmark
 
-sample-tsv-path: ${HOME}/repos/frag/data/test-samples.tsv
+sample-tsv-path: data/test-samples.tsv
 
 frag_ref_assemblies:
   chr22:
