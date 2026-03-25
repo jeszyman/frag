@@ -5,7 +5,7 @@
 # 
 # Source:  /home/jeszyman/repos/frag/frag.org
 # Author:  Jeffrey Szymanski
-# Tangled: 2026-03-25 09:43:51
+# Tangled: 2026-03-25 10:04:32
 # ============================================================
 
 # Fragment length distribution overlay plot.
@@ -17,6 +17,15 @@ output_pdf  <- args[2]
 samples_tsv <- if (length(args) >= 3) args[3] else NULL
 
 source("~/repos/science/R/figure_schema.R")
+if (!"Arial" %in% names(grDevices::pdfFonts()))
+  theme_scifig <- function(base_size = BASE_SIZE) {
+    theme_bw(base_size = base_size) +
+      theme(text = element_text(family = "Helvetica"),
+            panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+            strip.background = element_rect(fill = "grey95", colour = NA),
+            legend.background = element_rect(fill = NA), legend.key = element_rect(fill = NA),
+            plot.title = element_blank(), plot.margin = margin(4, 4, 4, 4, "pt"))
+  }
 library(tidyverse)
 
 freq_mat <- read.csv(freq_csv, row.names = 1, check.names = FALSE)
