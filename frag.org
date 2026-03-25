@@ -1450,6 +1450,7 @@ freq_csv    <- args[1]
 output_pdf  <- args[2]
 samples_tsv <- if (length(args) >= 3) args[3] else NULL
 
+source("~/repos/science/R/figure_schema.R")
 library(tidyverse)
 
 freq_mat <- read.csv(freq_csv, row.names = 1, check.names = FALSE)
@@ -1466,26 +1467,24 @@ if (!is.null(samples_tsv) && file.exists(samples_tsv)) {
   ))
   freq_long <- freq_long %>%
     left_join(samples, by = c("library" = "library_id"))
+  color_aes <- "group"
 } else {
-  freq_long$group <- "all"
+  color_aes <- "library"
 }
 
 p <- ggplot(freq_long, aes(x = length, y = freq,
-                            color = group, group = library)) +
-  geom_line(linewidth = 0.3, alpha = 0.4) +
-  theme_bw() +
-  labs(x = "Fragment length (bp)", y = "Frequency",
-       title = "Fragment length distributions") +
-  theme(plot.title = element_text(hjust = 0.5),
-        legend.position = c(0.85, 0.85),
-        legend.background = element_rect(linewidth = 0.3, color = "black")) +
+                            color = .data[[color_aes]], group = library)) +
+  geom_vline(xintercept = 167, linetype = "dashed", color = "grey50", linewidth = 0.4) +
+  geom_vline(xintercept = 334, linetype = "dashed", color = "grey50", linewidth = 0.4) +
+  geom_line(linewidth = 0.7, alpha = 0.85) +
+  scale_color_brewer(palette = "Dark2") +
+  scale_x_continuous(breaks = c(100, 200, 300, 400)) +
+  labs(x = "Fragment length (bp)", y = "Frequency", color = NULL) +
+  theme_scifig() +
+  theme(legend.position.inside = c(0.85, 0.7)) +
   guides(color = guide_legend(override.aes = list(alpha = 1, linewidth = 1)))
 
-if (length(unique(freq_long$group)) == 1) {
-  p <- p + scale_color_manual(values = "grey30") + theme(legend.position = "none")
-}
-
-ggsave(output_pdf, p, width = 8, height = 5)
+ggsave(output_pdf, p, width = PLOT_W, height = PLOT_H)
 #+end_src
 
 **** Ratio genome profile
@@ -1527,6 +1526,7 @@ args <- commandArgs(trailingOnly = TRUE)
 ratios_tsv <- args[1]
 output_pdf <- args[2]
 
+source("~/repos/science/R/figure_schema.R")
 library(tidyverse)
 
 ratios <- read_tsv(ratios_tsv)
@@ -1534,8 +1534,11 @@ ratios <- read_tsv(ratios_tsv)
 # Create genomic coordinate for x-axis (numeric chromosome sort)
 ratios <- ratios %>%
   mutate(chr_num = as.integer(gsub("chr", "", chr))) %>%
-  arrange(chr_num, start) %>%
-  mutate(genome_pos = row_number())
+  filter(!is.na(chr_num)) %>%
+  arrange(library, chr_num, start) %>%
+  group_by(library) %>%
+  mutate(genome_pos = row_number()) %>%
+  ungroup()
 
 # Alternating chromosome shading
 chr_bounds <- ratios %>%
@@ -1551,14 +1554,12 @@ p <- ggplot(ratios, aes(x = genome_pos, y = ratio.centered)) +
   geom_rect(data = filter(chr_bounds, shade),
             aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf),
             inherit.aes = FALSE, fill = "grey90", alpha = 0.5) +
-  geom_point(size = 0.3, alpha = 0.6, color = "steelblue") +
+  geom_line(linewidth = 0.3, alpha = 0.8, color = "steelblue") +
   geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
-  facet_wrap(~library, ncol = 1, scales = "free_y") +
-  theme_bw() +
-  labs(x = "Genomic position", y = "Centered ratio (short/long)",
-       title = "DELFI ratio genome profile") +
-  theme(plot.title = element_text(hjust = 0.5),
-        strip.background = element_rect(fill = "white"),
+  facet_wrap(~library, ncol = 1, scales = "fixed") +
+  labs(x = "Genomic position", y = "Centered ratio (short/long)") +
+  theme_scifig() +
+  theme(strip.background = element_rect(fill = "white"),
         axis.text.x = element_blank(), axis.ticks.x = element_blank())
 
 ggsave(output_pdf, p, width = 12, height = plot_height)
@@ -1597,15 +1598,23 @@ rule frag_plot_arm_zscore_heatmap:
 #+begin_src R :tangle ./scripts/plot_arm_zscore_heatmap.R
 #!/usr/bin/env Rscript
 # Arm z-score heatmap.
-# Rows = libraries, columns = chromosome arms, fill = z-score.
+# Rows = libraries (clustered), columns = chromosome arms, fill = z-score.
 
 args <- commandArgs(trailingOnly = TRUE)
 armz_csv   <- args[1]
 output_pdf <- args[2]
 
+source("~/repos/science/R/figure_schema.R")
 library(tidyverse)
 
 armz <- read.csv(armz_csv, row.names = 1, check.names = FALSE)
+
+# Cluster libraries by z-score profile
+if (nrow(armz) > 2) {
+  lib_order <- rownames(armz)[hclust(dist(armz))$order]
+} else {
+  lib_order <- rownames(armz)
+}
 
 armz_long <- armz %>%
   rownames_to_column("library") %>%
@@ -1622,27 +1631,26 @@ arm_order <- armz_long %>%
   pull(arm)
 
 armz_long$arm <- factor(armz_long$arm, levels = arm_order)
+armz_long$library <- factor(armz_long$library, levels = lib_order)
 
-z_limit <- max(3, ceiling(quantile(abs(armz_long$z), 0.95, na.rm = TRUE)))
-
-n_libs <- length(unique(armz_long$library))
-plot_height <- max(4, 0.4 * n_libs + 2)
-plot_width <- max(8, 0.25 * length(arm_order) + 2)
+z_limit <- max(abs(armz_long$z), na.rm = TRUE)
 
 p <- ggplot(armz_long, aes(x = arm, y = library, fill = z)) +
   geom_tile(color = "white", linewidth = 0.3) +
   scale_fill_gradient2(low = "steelblue", mid = "white", high = "firebrick",
                         midpoint = 0, limits = c(-z_limit, z_limit),
+                        oob = scales::squish,
+                        na.value = "grey80",
                         name = "Z-score") +
-  theme_minimal() +
-  labs(x = "Chromosome arm", y = "Library",
-       title = "Arm-level z-scores") +
-  theme(plot.title = element_text(hjust = 0.5),
-        axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
-        axis.text.y = element_text(size = 8),
-        panel.grid = element_blank())
+  coord_fixed() +
+  labs(x = "Chromosome arm", y = NULL) +
+  theme_scifig(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+        axis.text.y = element_text(size = 9),
+        legend.key.height = unit(0.8, "cm"),
+        legend.key.width = unit(0.4, "cm"))
 
-ggsave(output_pdf, p, width = plot_width, height = plot_height)
+ggsave(output_pdf, p, width = 12, height = 4)
 #+end_src
 
 *** NMF features

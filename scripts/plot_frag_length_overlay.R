@@ -5,7 +5,7 @@
 # 
 # Source:  /home/jeszyman/repos/frag/frag.org
 # Author:  Jeffrey Szymanski
-# Tangled: 2026-03-24 13:15:21
+# Tangled: 2026-03-25 09:43:51
 # ============================================================
 
 # Fragment length distribution overlay plot.
@@ -16,6 +16,7 @@ freq_csv    <- args[1]
 output_pdf  <- args[2]
 samples_tsv <- if (length(args) >= 3) args[3] else NULL
 
+source("~/repos/science/R/figure_schema.R")
 library(tidyverse)
 
 freq_mat <- read.csv(freq_csv, row.names = 1, check.names = FALSE)
@@ -32,23 +33,21 @@ if (!is.null(samples_tsv) && file.exists(samples_tsv)) {
   ))
   freq_long <- freq_long %>%
     left_join(samples, by = c("library" = "library_id"))
+  color_aes <- "group"
 } else {
-  freq_long$group <- "all"
+  color_aes <- "library"
 }
 
 p <- ggplot(freq_long, aes(x = length, y = freq,
-                            color = group, group = library)) +
-  geom_line(linewidth = 0.3, alpha = 0.4) +
-  theme_bw() +
-  labs(x = "Fragment length (bp)", y = "Frequency",
-       title = "Fragment length distributions") +
-  theme(plot.title = element_text(hjust = 0.5),
-        legend.position = c(0.85, 0.85),
-        legend.background = element_rect(linewidth = 0.3, color = "black")) +
+                            color = .data[[color_aes]], group = library)) +
+  geom_vline(xintercept = 167, linetype = "dashed", color = "grey50", linewidth = 0.4) +
+  geom_vline(xintercept = 334, linetype = "dashed", color = "grey50", linewidth = 0.4) +
+  geom_line(linewidth = 0.7, alpha = 0.85) +
+  scale_color_brewer(palette = "Dark2") +
+  scale_x_continuous(breaks = c(100, 200, 300, 400)) +
+  labs(x = "Fragment length (bp)", y = "Frequency", color = NULL) +
+  theme_scifig() +
+  theme(legend.position.inside = c(0.85, 0.7)) +
   guides(color = guide_legend(override.aes = list(alpha = 1, linewidth = 1)))
 
-if (length(unique(freq_long$group)) == 1) {
-  p <- p + scale_color_manual(values = "grey30") + theme(legend.position = "none")
-}
-
-ggsave(output_pdf, p, width = 8, height = 5)
+ggsave(output_pdf, p, width = PLOT_W, height = PLOT_H)

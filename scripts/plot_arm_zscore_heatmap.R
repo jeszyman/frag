@@ -5,19 +5,27 @@
 # 
 # Source:  /home/jeszyman/repos/frag/frag.org
 # Author:  Jeffrey Szymanski
-# Tangled: 2026-03-24 13:15:21
+# Tangled: 2026-03-25 09:43:51
 # ============================================================
 
 # Arm z-score heatmap.
-# Rows = libraries, columns = chromosome arms, fill = z-score.
+# Rows = libraries (clustered), columns = chromosome arms, fill = z-score.
 
 args <- commandArgs(trailingOnly = TRUE)
 armz_csv   <- args[1]
 output_pdf <- args[2]
 
+source("~/repos/science/R/figure_schema.R")
 library(tidyverse)
 
 armz <- read.csv(armz_csv, row.names = 1, check.names = FALSE)
+
+# Cluster libraries by z-score profile
+if (nrow(armz) > 2) {
+  lib_order <- rownames(armz)[hclust(dist(armz))$order]
+} else {
+  lib_order <- rownames(armz)
+}
 
 armz_long <- armz %>%
   rownames_to_column("library") %>%
@@ -34,24 +42,23 @@ arm_order <- armz_long %>%
   pull(arm)
 
 armz_long$arm <- factor(armz_long$arm, levels = arm_order)
+armz_long$library <- factor(armz_long$library, levels = lib_order)
 
-z_limit <- max(3, ceiling(quantile(abs(armz_long$z), 0.95, na.rm = TRUE)))
-
-n_libs <- length(unique(armz_long$library))
-plot_height <- max(4, 0.4 * n_libs + 2)
-plot_width <- max(8, 0.25 * length(arm_order) + 2)
+z_limit <- max(abs(armz_long$z), na.rm = TRUE)
 
 p <- ggplot(armz_long, aes(x = arm, y = library, fill = z)) +
   geom_tile(color = "white", linewidth = 0.3) +
   scale_fill_gradient2(low = "steelblue", mid = "white", high = "firebrick",
                         midpoint = 0, limits = c(-z_limit, z_limit),
+                        oob = scales::squish,
+                        na.value = "grey80",
                         name = "Z-score") +
-  theme_minimal() +
-  labs(x = "Chromosome arm", y = "Library",
-       title = "Arm-level z-scores") +
-  theme(plot.title = element_text(hjust = 0.5),
-        axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
-        axis.text.y = element_text(size = 8),
-        panel.grid = element_blank())
+  coord_fixed() +
+  labs(x = "Chromosome arm", y = NULL) +
+  theme_scifig(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+        axis.text.y = element_text(size = 9),
+        legend.key.height = unit(0.8, "cm"),
+        legend.key.width = unit(0.4, "cm"))
 
-ggsave(output_pdf, p, width = plot_width, height = plot_height)
+ggsave(output_pdf, p, width = 12, height = 4)
