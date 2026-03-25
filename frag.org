@@ -228,6 +228,7 @@ dependencies:
   - scikit-learn
   - scipy
   - snakemake
+  - sra-tools
 #+end_src
 
 ** Fragmentomics sequence processing
