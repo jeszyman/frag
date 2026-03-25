@@ -1,0 +1,55 @@
+name: smk-dry
+
+on:
+  pull_request:
+    paths:
+      - "workflows/**"
+      - "config/**"
+      - "scripts/**"
+      - ".github/workflows/smk-dry.yaml"
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch: {}
+
+concurrency:
+  group: smk-dry-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up micromamba
+        uses: mamba-org/setup-micromamba@v1
+        with:
+          environment-file: config/frag-conda-env.yaml
+          environment-name: frag
+          cache-environment: true
+
+      - name: Verify required files
+        run: |
+          set -euo pipefail
+          test -f config/frag-conda-env.yaml
+          test -f workflows/test.smk
+          test -f config/test.yaml
+
+      - name: Show environment info
+        run: |
+          micromamba run -n frag snakemake --version
+          micromamba run -n frag samtools --version || true
+
+      - name: Snakemake dry-run
+        run: |
+          micromamba run -n frag snakemake \
+            -s workflows/test.smk \
+            --configfile config/test.yaml \
+            --cores 4 \
+            --dry-run \
+            --printshellcmds \
+            --rerun-incomplete
