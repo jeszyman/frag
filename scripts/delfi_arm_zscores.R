@@ -1,13 +1,4 @@
 #!/usr/bin/env Rscript
-# ============================================================
-# AUTO-GENERATED — DO NOT EDIT DIRECTLY
-# Edits will be overwritten on next org-babel tangle.
-# 
-# Source:  /home/jeszyman/repos/frag/frag.org
-# Author:  Jeffrey Szymanski
-# Tangled: 2026-03-24 13:15:21
-# ============================================================
-
 # DELFI arm-level z-scores (Mathios et al. 2021)
 # Computes LOESS GC-corrected fragment counts per chromosome arm,
 # then z-scores against healthy reference cohort.

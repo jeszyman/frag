@@ -1,13 +1,4 @@
 #!/usr/bin/env python3
-# ============================================================
-# AUTO-GENERATED — DO NOT EDIT DIRECTLY
-# Edits will be overwritten on next org-babel tangle.
-# 
-# Source:  /home/jeszyman/repos/frag/frag.org
-# Author:  Jeffrey Szymanski
-# Tangled: 2026-03-24 13:15:21
-# ============================================================
-
 """F-profile decomposition of end motif frequencies.
 
 NMF learns latent motif signatures, then NNLS deconvolves each sample's

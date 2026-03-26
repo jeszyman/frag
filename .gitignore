@@ -14,3 +14,5 @@ tests/full/*
 !tests/full/inputs/
 !tests/full/inputs/**
 docs/superpowers/
+*.org.p
+*.org.pool

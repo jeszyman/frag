@@ -1,12 +1,3 @@
-# ============================================================
-# AUTO-GENERATED — DO NOT EDIT DIRECTLY
-# Edits will be overwritten on next org-babel tangle.
-# 
-# Source:  /home/jeszyman/repos/frag/frag.org
-# Author:  Jeffrey Szymanski
-# Tangled: 2026-03-24 13:15:21
-# ============================================================
-
 #########1#########2#########3#########4#########5#########6#########7#########8
 #
 # This is a modular snakefile, intended to be incorporated into a larger

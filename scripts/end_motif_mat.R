@@ -1,13 +1,4 @@
 #!/usr/bin/env Rscript
-# ============================================================
-# AUTO-GENERATED — DO NOT EDIT DIRECTLY
-# Edits will be overwritten on next org-babel tangle.
-# 
-# Source:  /home/jeszyman/repos/frag/frag.org
-# Author:  Jeffrey Szymanski
-# Tangled: 2026-03-24 13:15:21
-# ============================================================
-
 args <- commandArgs(trailingOnly = TRUE)
 motif_str <- args[1]
 motif_tsv <- args[2]

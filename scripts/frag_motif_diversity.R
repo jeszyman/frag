@@ -1,13 +1,4 @@
 #!/usr/bin/env Rscript
-# ============================================================
-# AUTO-GENERATED — DO NOT EDIT DIRECTLY
-# Edits will be overwritten on next org-babel tangle.
-# 
-# Source:  /home/jeszyman/repos/frag/frag.org
-# Author:  Jeffrey Szymanski
-# Tangled: 2026-03-24 13:15:21
-# ============================================================
-
 # Motif diversity score: Shannon entropy normalized by log(256).
 # Uses data.table for efficient I/O.
 
