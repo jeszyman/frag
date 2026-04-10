@@ -387,6 +387,104 @@ bwa mem -M -t "$threads" "$ref" "$r1" "$r2" \
 samtools index -@ 4 "$out_bam"
 #+end_src
 
+**** Identifier compatibility check
+
+Global gate that verifies chromosome-naming convention across all inputs
+before any region-based rule runs. Catches the classic =chr1= vs =1= silent-failure
+bug where =bedtools nuc=, =samtools view -L=, and =bedtools intersect= drop
+everything without error when files disagree on whether contig names carry a
+=chr= prefix.
+
+The check is tolerant of subsets (a regions BED covering only autosomes is fine
+against a reference with autosomes + sex chroms + decoys) but strict about total
+mismatch (zero chrom overlap with the reference is an immediate halt). A
+sentinel file gates the DAG so the check runs exactly once per reference.
+
+#+begin_src snakemake
+rule frag_check_ids:
+    message:
+        "Verify all inputs share chromosome-naming convention with the reference"
+    conda:
+        CONDA_FRAG
+    input:
+        fasta    = f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa",
+        regions  = config["gc5mb"],
+        blklist  = config["blklist"],
+        cytoband = config["cytoband"],
+        bams     = expand(
+            f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.coorsort.bam",
+            library_id=FRAG_LIBRARY_IDS, allow_missing=True,
+        ),
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_check_ids.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_frag_check_ids.tsv"
+    output:
+        sentinel = f"{D_FRAG}/ref/{{ref_name}}.ids_verified.ok",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[check_ids] $(date) ref={wildcards.ref_name}"
+
+        bash scripts/check_ids.sh \
+          "{input.fasta}" "{input.regions}" "{input.blklist}" "{input.cytoband}" \
+          "{output.sentinel}" {input.bams}
+        """
+#+end_src
+
+#+begin_src bash :tangle ./scripts/check_ids.sh
+#!/usr/bin/env bash
+set -euo pipefail
+
+# check_ids.sh
+# Verify that all pipeline inputs share a chromosome-naming convention with the
+# reference FASTA. Catches the classic "chr1" vs "1" silent-failure bug where
+# bedtools nuc, samtools view -L, and bedtools intersect emit nothing on a pure
+# identifier mismatch — producing empty outputs and opaque downstream errors.
+#
+# The check is non-empty intersection: for each file, its chrom set must share
+# at least one name with the reference's .fai. Subsets are fine (regions BED
+# with only autosomes against a reference with autosomes + X + Y + decoys).
+# Zero overlap is a hard halt.
+#
+# Usage:
+#   check_ids.sh <ref.fa> <regions.bed> <blacklist.bed.gz> <cytoband.txt> \
+#                <sentinel.ok> <bam1> [bam2 ...]
+
+ref="$1"; regions="$2"; blklist="$3"; cyto="$4"; sentinel="$5"
+shift 5
+
+[[ -f "${ref}.fai" ]] || samtools faidx "$ref"
+ref_chroms=$(cut -f1 "${ref}.fai" | sort -u)
+
+check() {
+  local label="$1" file_chroms="$2"
+  local overlap
+  overlap=$(comm -12 <(echo "$ref_chroms") <(echo "$file_chroms" | sort -u) | wc -l)
+  if [[ "$overlap" -eq 0 ]]; then
+    echo "ERROR: check_ids: $label has zero chrom overlap with reference ${ref}.fai" >&2
+    echo "  ref sample:    $(echo "$ref_chroms"  | head -3 | tr '\n' ' ')" >&2
+    echo "  $label sample: $(echo "$file_chroms" | head -3 | tr '\n' ' ')" >&2
+    echo "  Likely cause: 'chr' prefix mismatch. All inputs must use the reference's convention." >&2
+    exit 1
+  fi
+  echo "[check_ids] OK: $label ($overlap chroms match reference)" >&2
+}
+
+check "regions"   "$(cut -f1 "$regions")"
+check "blacklist" "$(zcat -f "$blklist" | cut -f1)"
+check "cytoband"  "$(cut -f1 "$cyto")"
+
+for bam in "$@"; do
+  check "$(basename "$bam")" \
+    "$(samtools view -H "$bam" | awk '$1=="@SQ" {sub("SN:","",$2); print $2}')"
+done
+
+mkdir -p "$(dirname "$sentinel")"
+touch "$sentinel"
+echo "[check_ids] ALL OK — sentinel written to $sentinel" >&2
+#+end_src
+
 **** Filter alignments
 #+begin_src snakemake
 rule frag_filter_alignments:
@@ -395,8 +493,9 @@ rule frag_filter_alignments:
     conda:
         CONDA_FRAG
     input:
-        bam      = f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.coorsort.bam",
-        keep_bed = f"{D_FRAG}/ref/keep_5mb.bed",
+        bam       = f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.coorsort.bam",
+        keep_bed  = f"{D_FRAG}/ref/keep_5mb.bed",
+        ids_ok    = f"{D_FRAG}/ref/{{ref_name}}.ids_verified.ok",
     log:
         cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_filter_alignments.log",
     benchmark:
@@ -428,12 +527,37 @@ keep_bed="$2"
 threads="$3"
 out_bam="$4"
 
+# Precondition: BAM @SQ names and keep_bed chromosomes must share at least one
+# name. samtools view -L silently drops every read on a pure identifier mismatch
+# (typically 'chr' prefix), producing a header-only BAM with no error.
+bam_sn=$(samtools view -H "$in_bam" | awk '$1=="@SQ" {sub("SN:","",$2); print $2}' | sort -u)
+bed_chroms=$(cut -f1 "$keep_bed" | sort -u)
+if [[ -z "$(comm -12 <(echo "$bam_sn") <(echo "$bed_chroms"))" ]]; then
+  echo "ERROR: filter_alignments: $in_bam @SQ and $keep_bed chromosomes share zero overlap" >&2
+  echo "  BAM sample: $(echo "$bam_sn"     | head -3 | tr '\n' ' ')" >&2
+  echo "  BED sample: $(echo "$bed_chroms" | head -3 | tr '\n' ' ')" >&2
+  echo "  Likely cause: 'chr' prefix mismatch. Re-stage $keep_bed or reheader the BAM to match." >&2
+  exit 1
+fi
+
 samtools view -@ "$threads" -b -h -L "$keep_bed" -q 30 "$in_bam" \
   | samtools sort -@ "$threads" -n -o - - \
   | samtools fixmate -@ "$threads" - - \
   | samtools sort -@ "$threads" -o "$out_bam" -
 
 samtools index -@ "$threads" "$out_bam"
+
+# Postcondition: output BAM must contain reads (not just a header).
+# Uses idxstats for O(1)-per-chrom speed rather than a full scan.
+reads=$(samtools idxstats "$out_bam" | awk '{s += $3} END {print s+0}')
+if [[ "$reads" -eq 0 ]]; then
+  echo "ERROR: filter_alignments: $out_bam contains zero reads after filtering" >&2
+  echo "  Input BAM: $in_bam" >&2
+  echo "  Keep BED:  $keep_bed" >&2
+  echo "  Possible causes: MAPQ threshold too strict, keep regions do not overlap reads, or upstream filter was already empty." >&2
+  exit 1
+fi
+echo "[filter_alignments] OK: $reads reads in $out_bam" >&2
 #+end_src
 
 **** BAM to fragment BED
@@ -477,6 +601,29 @@ input_bam="$1"
 params_fasta="$2"
 output_frag_bed="$3"
 
+# Precondition: input BAM must contain reads. A header-only BAM propagates
+# silently through bedtools bamtobed and produces an empty frag.bed that
+# breaks downstream R scripts with opaque "NULL data.table" errors.
+in_reads=$(samtools idxstats "$input_bam" 2>/dev/null | awk '{s += $3} END {print s+0}')
+if [[ "$in_reads" -eq 0 ]]; then
+  echo "ERROR: bam_to_frag_bed: $input_bam contains zero reads" >&2
+  exit 1
+fi
+
+# Precondition: BAM @SQ names must overlap FASTA index chromosomes. bedtools
+# nuc silently emits bogus rows when a read's chrom is not in the FASTA.
+if [[ -f "${params_fasta}.fai" ]]; then
+  bam_sn=$(samtools view -H "$input_bam" | awk '$1=="@SQ" {sub("SN:","",$2); print $2}' | sort -u)
+  fai_chroms=$(cut -f1 "${params_fasta}.fai" | sort -u)
+  if [[ -z "$(comm -12 <(echo "$bam_sn") <(echo "$fai_chroms"))" ]]; then
+    echo "ERROR: bam_to_frag_bed: $input_bam @SQ and ${params_fasta}.fai share zero overlap" >&2
+    echo "  BAM sample:   $(echo "$bam_sn"     | head -3 | tr '\n' ' ')" >&2
+    echo "  FASTA sample: $(echo "$fai_chroms" | head -3 | tr '\n' ' ')" >&2
+    echo "  Likely cause: 'chr' prefix mismatch between BAM header and reference FASTA." >&2
+    exit 1
+  fi
+fi
+
 bedtools bamtobed -bedpe -i "$input_bam" \
   | awk '$1==$4 {print $0}' \
   | awk '$2 < $6 {print $0}' \
@@ -484,6 +631,16 @@ bedtools bamtobed -bedpe -i "$input_bam" \
   | bedtools nuc -fi "$params_fasta" -bed stdin \
   | awk -v OFS='\t' '{print $1,$2,$3,$5,$12}' \
   | sed '1d' > "$output_frag_bed"
+
+# Postcondition: output BED must be non-empty.
+lines=$(wc -l < "$output_frag_bed")
+if [[ "$lines" -eq 0 ]]; then
+  echo "ERROR: bam_to_frag_bed: $output_frag_bed is empty" >&2
+  echo "  Input BAM read count: $in_reads" >&2
+  echo "  Likely cause: no intra-chromosome paired reads, or bedtools nuc dropped rows due to identifier mismatch." >&2
+  exit 1
+fi
+echo "[bam_to_frag_bed] OK: $lines fragments in $output_frag_bed" >&2
 #+end_src
 
 *** Fragment length
@@ -499,6 +656,7 @@ rule frag_gc_map_bins:
         regions = config["gc5mb"],
         blklist = config["blklist"],
         fasta   = expand(f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa", ref_name=frag_ref_names)[0],
+        ids_ok  = expand(f"{D_FRAG}/ref/{{ref_name}}.ids_verified.ok", ref_name=frag_ref_names)[0],
     log:
         cmd = f"{D_LOGS}/frag_gc_map_bins.log",
     benchmark:
@@ -533,8 +691,22 @@ keep="$4"
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
-# Create genome file from FASTA index
+# Ensure FASTA is indexed
 samtools faidx "$fasta" 2>/dev/null || true
+
+# Precondition: regions BED and FASTA must share at least one chromosome name.
+# bedtools nuc silently skips windows whose chrom is not in the FASTA, producing
+# an empty keep.bed with only "Feature beyond the length of X size (0 bp)" warnings.
+regions_chroms=$(cut -f1 "$regions" | sort -u)
+fai_chroms=$(cut -f1 "${fasta}.fai" | sort -u)
+if [[ -z "$(comm -12 <(echo "$regions_chroms") <(echo "$fai_chroms"))" ]]; then
+  echo "ERROR: make_gc_map_bins: $regions and ${fasta}.fai share zero chromosome names" >&2
+  echo "  regions sample: $(echo "$regions_chroms" | head -3 | tr '\n' ' ')" >&2
+  echo "  FASTA sample:   $(echo "$fai_chroms"     | head -3 | tr '\n' ' ')" >&2
+  echo "  Likely cause: 'chr' prefix mismatch. Strip or add prefix on one side to match." >&2
+  exit 1
+fi
+
 awk 'BEGIN{OFS="\t"} {print $1,$2}' "${fasta}.fai" > "$tmpdir/genome.txt"
 
 # Window into 5Mb bins
@@ -549,6 +721,18 @@ bedtools nuc -fi "$fasta" -bed "$tmpdir/windows.bed" \
 bedtools intersect -a "$tmpdir/gc_windows.bed" -b "$blklist" -v -wa \
   | grep -v '_' \
   | awk '{ if ($4 >= 0.3) print $0 }' > "$keep"
+
+# Postcondition: keep.bed must be non-empty.
+lines=$(wc -l < "$keep")
+if [[ "$lines" -eq 0 ]]; then
+  echo "ERROR: make_gc_map_bins produced empty $keep" >&2
+  echo "  Possible causes:" >&2
+  echo "    - blacklist removed all bins (verify $blklist chrom naming matches $regions)" >&2
+  echo "    - all bins had GC < 0.3" >&2
+  echo "    - bedtools nuc silently dropped windows (identifier mismatch against FASTA)" >&2
+  exit 1
+fi
+echo "[make_gc_map_bins] OK: $lines bins kept in $keep" >&2
 #+end_src
 
 **** GC distribution

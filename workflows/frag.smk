@@ -111,14 +111,44 @@ rule frag_align:
           "{input.ref}" "{input.r1}" "{input.r2}" \
           "{output.bam}" {threads}
         """
+rule frag_check_ids:
+    message:
+        "Verify all inputs share chromosome-naming convention with the reference"
+    conda:
+        CONDA_FRAG
+    input:
+        fasta    = f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa",
+        regions  = config["gc5mb"],
+        blklist  = config["blklist"],
+        cytoband = config["cytoband"],
+        bams     = expand(
+            f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.coorsort.bam",
+            library_id=FRAG_LIBRARY_IDS, allow_missing=True,
+        ),
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_check_ids.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_frag_check_ids.tsv"
+    output:
+        sentinel = f"{D_FRAG}/ref/{{ref_name}}.ids_verified.ok",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[check_ids] $(date) ref={wildcards.ref_name}"
+
+        bash scripts/check_ids.sh \
+          "{input.fasta}" "{input.regions}" "{input.blklist}" "{input.cytoband}" \
+          "{output.sentinel}" {input.bams}
+        """
 rule frag_filter_alignments:
     message:
         "Filter alignments by MAPQ and genomic region"
     conda:
         CONDA_FRAG
     input:
-        bam      = f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.coorsort.bam",
-        keep_bed = f"{D_FRAG}/ref/keep_5mb.bed",
+        bam       = f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.coorsort.bam",
+        keep_bed  = f"{D_FRAG}/ref/keep_5mb.bed",
+        ids_ok    = f"{D_FRAG}/ref/{{ref_name}}.ids_verified.ok",
     log:
         cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_filter_alignments.log",
     benchmark:
@@ -168,6 +198,7 @@ rule frag_gc_map_bins:
         regions = config["gc5mb"],
         blklist = config["blklist"],
         fasta   = expand(f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa", ref_name=frag_ref_names)[0],
+        ids_ok  = expand(f"{D_FRAG}/ref/{{ref_name}}.ids_verified.ok", ref_name=frag_ref_names)[0],
     log:
         cmd = f"{D_LOGS}/frag_gc_map_bins.log",
     benchmark:
