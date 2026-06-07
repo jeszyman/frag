@@ -1,4 +1,5 @@
 * Cell-free DNA Fragmentomics Analysis                              :biopipe:
+- [ ] ingest https://github.com.mcas.ms/epifluidlab/FinaleToolkit
 - [ ] could probably go a little heavier on data size to test
 ** [[id:339b69f6-6c09-4e9d-a2ec-27bdf5747163][README]]
 ** Repository setup and administration
@@ -540,10 +541,17 @@ if [[ -z "$(comm -12 <(echo "$bam_sn") <(echo "$bed_chroms"))" ]]; then
   exit 1
 fi
 
+# Samtools sort temp files go to CWD by default, which may be a small/home
+# filesystem. On large BAMs the name-sort spill can exhaust disk and surface
+# as bogus "Illegal seek" write errors on the tmp file. Force tmp to a known
+# large scratch dir when TMPDIR_SAMTOOLS is set, else fall back to $TMPDIR, else /tmp.
+sort_tmp="${TMPDIR_SAMTOOLS:-${TMPDIR:-/tmp}}/samtools_sort.$$"
+mkdir -p "$(dirname "$sort_tmp")"
+
 samtools view -@ "$threads" -b -h -L "$keep_bed" -q 30 "$in_bam" \
-  | samtools sort -@ "$threads" -n -o - - \
+  | samtools sort -@ "$threads" -n -T "${sort_tmp}.name" -o - - \
   | samtools fixmate -@ "$threads" - - \
-  | samtools sort -@ "$threads" -o "$out_bam" -
+  | samtools sort -@ "$threads" -T "${sort_tmp}.coord" -o "$out_bam" -
 
 samtools index -@ "$threads" "$out_bam"
 
@@ -2569,6 +2577,10 @@ include: "frag.smk"
 #+bibliography: resources/frag_refs.bib
 #+cite_export: csl ~/.emacs.d/elpa/org-ref-20240602.2029/citeproc/csl-styles/apa-numeric-superscript-brackets.csl
 - [[id:173e0331-9140-47d0-9e5e-ec91672ebdc3][cfDNA fragmentomics]]
+- [[id:c66abd39-25fb-436a-8ee3-3623f99d9420][ctDNA fragment length shortening]]
+- [[id:de9485e3-5321-45a9-8720-42ea26d02aab][cfDNA modeling from first principles]]
+- [[id:e6a5aea2-099f-4fdd-8b7f-6abbb57f1bb0][Fragment size biology]]
+- [[id:9c039277-94b1-46cf-81f2-dcedfd63e576][cfDNA fragment length-based methods]]
 *** Background
 
 
@@ -2582,6 +2594,8 @@ Impact is likely limited in high tumor-fraction samples where CNA signal is alre
 
 
 Lilli Senders analyzed cfDNA fragment length enrichment in 28 sarcoma (Ewing and other subtypes) vs 17 healthy cfDNA samples using EM-seq on hg38. Sample selection used two orthogonal biomarkers: ichorCNA TF > 0.02 and pan-sarcoma methylation z-score > -1.96. Permutation testing (1000× per-base label shuffling) identified 58–129 bp as the enriched window (51 bins exceeding per-base 95th percentile thresholds). Bootstrap stability failed: maximum selection frequency = 0.84, with 0 bins achieving γ ≥ 0.90 and only 4 bins at γ ≥ 0.80.
+
+*Relation to Zhou et al. 2026 (size deconvolution).* A length window selects on fragment /amplitude/ (proportion of short molecules), which Zhou et al. show is not tumor-specific: phagocytosis-driven shortening (post-RT, benign disease, cancer-negative germline /TP53/ carriers) raises the intra-nucleosomal amplitude with no change in fragmentation /entropy/, while ctDNA raises both [cite:@zhou2026sizedeconv]. This is a specificity risk at deployment (inflammation, prior radiotherapy) that the methylation-z sample gate protects the training labels against but not the window itself; the intra-/inter-nucleosomal entropy ratio (split at a ~159 bp pivot) is the confounder-robust complement worth benchmarking against our window-filtered ichorCNA TF on the same 28v17 set. The ~10 bp bootstrap instability is consistent with their model of discrete periodic components, suggesting selection is more stable at the component than the per-bin level.
 
 *** Data
 
@@ -3306,6 +3320,7 @@ Implementation path:
 
 *** TODO Integrate [[https://github.com/alexcpan/nf1_fragmentomics][nf1_fragmentomics]]
 *** Ideas
+- Peak representation analysis instead of per-bp fragment length distributions: fragment length shifts in cfDNA typically manifest as enrichment or depletion of discrete peak populations (nucleosomal spacing harmonics, sub-nucleosomal peaks) governed by DNA groove periodicity (~10.4 bp) and DNase I cleavage preferences rather than smooth distributional shifts. Representing each sample as a vector of peak-level abundances (e.g., the ~167 bp mono-nucleosomal, ~120 bp sub-nucleosomal, ~250 bp di-nucleosomal peaks and inter-peak valleys) may better capture biologically meaningful changes and reduce noise from per-bp stochasticity.
 - Fragmentome comorbidity index (FCMI) as confounder: Annapragada et al. 2026 showed cfDNA fragmentomes reflect general disease burden (high vs low Charlson Comorbidity Index, HR 1.86 for survival). In cancer fragmentomics classifiers, patients with high non-cancer comorbidity burden may have shifted baseline fragmentomes that confound cancer-specific signal. Consider including CCI as a covariate or computing an FCMI-like score to regress out morbidity signal before cancer classification — especially relevant for NF1 cohorts with variable non-malignant disease burden (plexiform neurofibromas, other NF1 manifestations) [cite:@annapragada2026]
 - multimappers in bedtools would need a CIGAR filt (no flag) https://www.biostars.org/p/239772/
 - make hg38 gc filter https://stackoverflow.com/questions/8551349/how-to-sum-up-every-10-lines-and-calculate-average-using-awk

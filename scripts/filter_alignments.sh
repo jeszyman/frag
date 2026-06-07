@@ -23,10 +23,17 @@ if [[ -z "$(comm -12 <(echo "$bam_sn") <(echo "$bed_chroms"))" ]]; then
   exit 1
 fi
 
+# Samtools sort temp files go to CWD by default, which may be a small/home
+# filesystem. On large BAMs the name-sort spill can exhaust disk and surface
+# as bogus "Illegal seek" write errors on the tmp file. Force tmp to a known
+# large scratch dir when TMPDIR_SAMTOOLS is set, else fall back to $TMPDIR, else /tmp.
+sort_tmp="${TMPDIR_SAMTOOLS:-${TMPDIR:-/tmp}}/samtools_sort.$$"
+mkdir -p "$(dirname "$sort_tmp")"
+
 samtools view -@ "$threads" -b -h -L "$keep_bed" -q 30 "$in_bam" \
-  | samtools sort -@ "$threads" -n -o - - \
+  | samtools sort -@ "$threads" -n -T "${sort_tmp}.name" -o - - \
   | samtools fixmate -@ "$threads" - - \
-  | samtools sort -@ "$threads" -o "$out_bam" -
+  | samtools sort -@ "$threads" -T "${sort_tmp}.coord" -o "$out_bam" -
 
 samtools index -@ "$threads" "$out_bam"
 
