@@ -1,6 +1,6 @@
 Fragmentomics pipeline for cfDNA whole-genome sequencing analysis. Extracts fragment length features, DELFI ratios, end motif profiles, and NMF signatures from paired-end WGS data.
 
-![img](resources/test_smk.png)
+![img](docs/frag.dag.png)
 
 
 # Continuous Integration
