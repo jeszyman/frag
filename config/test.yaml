@@ -7,7 +7,7 @@ directories:
   logs: tests/logs
   benchmark: tests/benchmark
 
-sample-tsv-path: data/test-samples.tsv
+sample-tsv-path: config/samples.tsv
 
 frag_ref_assemblies:
   chr22:
