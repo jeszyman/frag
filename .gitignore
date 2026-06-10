@@ -16,3 +16,6 @@ tests/full/*
 docs/superpowers/
 *.org.p
 *.org.pool
+
+# org LaTeX-preview cache
+ltximg/

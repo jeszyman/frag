@@ -1,7 +1,2 @@
 # Large test fixtures — intentional; needed for integration tests
-test/bam/frag/lib001_filt.bam
-test/bam/frag/lib002_filt.bam
-test/bam/raw/lib001.bam
-test/bam/raw/lib002.bam
-test/inputs/chr19.fa
 tests/full/inputs/chr22-test.fa.gz
