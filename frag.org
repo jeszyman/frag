@@ -2509,10 +2509,14 @@ rule frag_nmf_length_features:
 Produces W (samples x components) and H (components x lengths) matrices.
 Uses KL divergence with multiplicative update solver (Renaud 2022).
 """
+import os
 import sys
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import NMF
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from frag_checks import check_nonempty, log_n
 
 freq_csv = sys.argv[1]
 n_components = int(sys.argv[2])
@@ -2520,6 +2524,8 @@ out_w = sys.argv[3]
 out_h = sys.argv[4]
 
 freq_mat = pd.read_csv(freq_csv, index_col=0)
+check_nonempty(freq_mat, "freq_mat")
+log_n(freq_mat, "freq matrix")
 
 nmf = NMF(
     n_components=n_components,
@@ -2679,11 +2685,15 @@ rule frag_fprofiles:
 NMF learns latent motif signatures, then NNLS deconvolves each sample's
 motif profile into F-profile contributions (percentages summing to 100).
 """
+import os
 import sys
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import NMF
 from scipy.optimize import nnls
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from frag_checks import check_nonempty, log_n
 
 motif_tsv = sys.argv[1]
 n_components = int(sys.argv[2])
@@ -2691,6 +2701,8 @@ out_fprof = sys.argv[3]
 out_motif_per_fprof = sys.argv[4]
 
 motifs_df = pd.read_csv(motif_tsv, sep="\t").fillna(0)
+check_nonempty(motifs_df, "motifs_df")
+log_n(motifs_df, "motifs read")
 M = motifs_df.iloc[:, 1:].astype(float).T  # samples x motifs
 
 n_components = min(n_components, M.shape[0], M.shape[1])
@@ -2726,7 +2738,7 @@ F_df.to_csv(out_motif_per_fprof, sep="\t")
 #+end_src
 
 *** Shared scripts / library
-Data-integrity helpers sourced by the analysis scripts (=log_n=, =check_n=, =check_nonempty=, =assert_cols=). Hoisted to a shared header per the biopipe convention.
+Data-integrity helpers for the analysis scripts (=log_n=, =check_n=, =check_nonempty=, =assert_cols=) — =frag_checks.R= for R scripts, =frag_checks.py= for Python scripts. Hoisted to a shared header per the biopipe convention.
 
 #+begin_src R :tangle ./scripts/frag_checks.R
 #!/usr/bin/env Rscript
@@ -2757,6 +2769,48 @@ assert_cols <- function(x, cols, label = "object") {
   if (length(miss) > 0) stop(sprintf("[check] %s missing columns: %s", label, paste(miss, collapse = ", ")))
   invisible(x)
 }
+#+end_src
+
+#+begin_src python :tangle ./scripts/frag_checks.py
+#!/usr/bin/env python3
+"""frag_checks.py — data-integrity helpers for frag analysis scripts.
+
+Import with a sibling-path shim (rules run scripts as `python3 scripts/<x>.py`
+from the repo root):
+
+    import os, sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from frag_checks import check_nonempty, log_n
+"""
+import sys
+
+
+def log_n(df, label="rows"):
+    """Log row count to stderr; return df for chaining."""
+    print(f"[check] {label}: {len(df)}", file=sys.stderr)
+    return df
+
+
+def check_n(df, n, label="rows"):
+    """Raise unless df has exactly n rows."""
+    if len(df) != n:
+        raise ValueError(f"[check] {label}: expected {n}, got {len(df)}")
+    return df
+
+
+def check_nonempty(df, label="object"):
+    """Raise if df has zero rows."""
+    if len(df) == 0:
+        raise ValueError(f"[check] {label} is empty")
+    return df
+
+
+def assert_cols(df, cols, label="object"):
+    """Raise unless all `cols` are present in df.columns."""
+    missing = [c for c in cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"[check] {label} missing columns: {', '.join(missing)}")
+    return df
 #+end_src
 
 ** Testing

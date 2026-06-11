@@ -4,11 +4,15 @@
 NMF learns latent motif signatures, then NNLS deconvolves each sample's
 motif profile into F-profile contributions (percentages summing to 100).
 """
+import os
 import sys
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import NMF
 from scipy.optimize import nnls
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from frag_checks import check_nonempty, log_n
 
 motif_tsv = sys.argv[1]
 n_components = int(sys.argv[2])
@@ -16,6 +20,8 @@ out_fprof = sys.argv[3]
 out_motif_per_fprof = sys.argv[4]
 
 motifs_df = pd.read_csv(motif_tsv, sep="\t").fillna(0)
+check_nonempty(motifs_df, "motifs_df")
+log_n(motifs_df, "motifs read")
 M = motifs_df.iloc[:, 1:].astype(float).T  # samples x motifs
 
 n_components = min(n_components, M.shape[0], M.shape[1])

@@ -4,10 +4,14 @@
 Produces W (samples x components) and H (components x lengths) matrices.
 Uses KL divergence with multiplicative update solver (Renaud 2022).
 """
+import os
 import sys
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import NMF
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from frag_checks import check_nonempty, log_n
 
 freq_csv = sys.argv[1]
 n_components = int(sys.argv[2])
@@ -15,6 +19,8 @@ out_w = sys.argv[3]
 out_h = sys.argv[4]
 
 freq_mat = pd.read_csv(freq_csv, index_col=0)
+check_nonempty(freq_mat, "freq_mat")
+log_n(freq_mat, "freq matrix")
 
 nmf = NMF(
     n_components=n_components,
