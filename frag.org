@@ -968,7 +968,7 @@ rule frag_gc_sample:
 # Input : healthy_med  — RDS of healthy median GC-strata fractions
 #         frag_file    — fragment BED (chr, start, end, gc_raw, len)
 # Output: sampled_file — resampled fragments (chr, start, end, len, gc_strata)
-# NOTE: the resampling is NOT seeded (pre-existing); output is stochastic.
+# NOTE: the resampling is seeded (set.seed below) so the output is reproducible.
 # -----------------------------------------------------------------------------
 
 # =============================================================================
@@ -1006,7 +1006,7 @@ annotate_gc <- function(frag_bed, healthy_fract) {
     left_join(healthy_fract, by = "gc_strata")
 }
 
-#' GC-weighted resample of fragments (with replacement). Not seeded.
+#' GC-weighted resample of fragments (with replacement). Caller seeds for reproducibility.
 #'
 #' @param frag Tibble from annotate_gc().
 #' @return Tibble (chr, start, end, len, gc_strata).
@@ -1037,6 +1037,8 @@ stratatotake <- frag$gc_strata[which.max(frag$med_frag_fract)]
 fragsinmaxstrata <- length(which(frag$gc_strata == stratatotake))
 fragstotake <- round(fragsinmaxstrata / stratatotake)
 
+# Seed before the weighted resample so the sampled fragments are reproducible.
+set.seed(42)
 sampled <- resample_by_gc(frag)
 
 write.table(sampled, sep = "\t", col.names = FALSE, row.names = FALSE,
