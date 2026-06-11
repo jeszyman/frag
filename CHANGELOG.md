@@ -12,6 +12,11 @@ is versioned as a whole with SemVer git tags (`vX.Y.Z`).
   AGENTS.md / CHANGELOG.md, migrate the test sample sheet to `config/samples.tsv`,
   relocate the DAG figure to `docs/frag.dag.png`, remove legacy `test/`, the
   org LaTeX-preview cache, and the `frag.md` stub.
+- Add the `frag_checks.{R,py}` data-integrity library and conform all 13 R
+  analysis scripts plus the 2 Python scripts to the code style guide, guarding
+  read inputs; remove the orphaned `count_scale.R`.
+- Seed `sample_frags_by_gc` (`set.seed(42)`) so the GC-weighted resample is
+  reproducible.
 
 ## [1.0.0] — proposed first release tag
 - Restructured to the biopipe module pattern; migrated the fragment-length (GC
