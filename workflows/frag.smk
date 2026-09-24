@@ -394,44 +394,42 @@ rule frag_ratio_normalize:
         Rscript scripts/make_ratios.R \
           "{input.tsv}" "{output.tsv}"
         """
-rule frag_sample_motifs:
+rule frag_end_motifs:
     message:
-        "Sample 5-prime end motifs from filtered BAM"
+        "Count strand-aware 5-prime fragment-end 4-mers from filtered BAM"
     conda:
         CONDA_FRAG
     input:
         bam   = f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.filt.bam",
         fasta = f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa",
     log:
-        cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_sample_motifs.log",
+        cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_end_motifs.log",
     benchmark:
-        f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_sample_motifs.tsv"
+        f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_end_motifs.tsv"
     params:
-        n_motif = config.get("end_motif", {}).get("n_motif", 4),
-        n_reads = config.get("end_motif", {}).get("n_reads", 1000000),
-        seed    = config.get("end_motif", {}).get("seed", 42),
+        max_ends = config.get("end_motif", {}).get("max_ends") or 0,
+        seed     = config.get("end_motif", {}).get("seed", 42),
     threads:
         4
     output:
-        txt = f"{D_FRAG}/motifs/{{library_id}}.{{ref_name}}.motifs.txt",
+        tsv = f"{D_FRAG}/motifs/{{library_id}}.{{ref_name}}.motif_counts.tsv",
     shell:
         """
         exec &>> "{log.cmd}"
-        echo "[motifs] $(date) lib={wildcards.library_id} ref={wildcards.ref_name} threads={threads}"
+        echo "[end_motifs] $(date) lib={wildcards.library_id} ref={wildcards.ref_name} max_ends={params.max_ends}"
 
-        bash scripts/sample_motifs.sh \
-          "{input.bam}" "{input.fasta}" \
-          {params.n_motif} {params.n_reads} {params.seed} {threads} \
-          "{output.txt}"
+        bash scripts/frag_end_motifs.sh \
+          "{input.bam}" "{input.fasta}" "{output.tsv}" \
+          {threads} {params.max_ends} {params.seed}
         """
 rule frag_motif_matrix:
     message:
-        "Build motif frequency matrix across libraries"
+        "Build motif count and fraction matrices across libraries"
     conda:
         CONDA_FRAG
     input:
-        txts = lambda wc: expand(
-            f"{D_FRAG}/motifs/{{library_id}}.{{ref_name}}.motifs.txt",
+        counts = lambda wc: expand(
+            f"{D_FRAG}/motifs/{{library_id}}.{{ref_name}}.motif_counts.tsv",
             library_id=FRAG_LIBRARY_IDS,
             ref_name=wc.ref_name,
         ),
@@ -441,15 +439,19 @@ rule frag_motif_matrix:
         f"{D_BENCHMARK}/{{ref_name}}_frag_motif_matrix.tsv"
     threads:
         1
+    wildcard_constraints:
+        # keeps {ref_name}.motif_counts.tsv from matching per-library count files
+        ref_name = r"[^.]+",
     output:
-        tsv = f"{D_FRAG}/motifs/{{ref_name}}.all_motifs.tsv",
+        counts = f"{D_FRAG}/motifs/{{ref_name}}.motif_counts.tsv",
+        tsv    = f"{D_FRAG}/motifs/{{ref_name}}.all_motifs.tsv",
     shell:
         """
         exec &>> "{log.cmd}"
         echo "[motif_matrix] $(date) ref={wildcards.ref_name}"
 
-        Rscript scripts/end_motif_mat.R \
-          "{input.txts}" "{output.tsv}"
+        python3 scripts/frag_motif_matrix.py \
+          "{output.counts}" "{output.tsv}" {input.counts}
         """
 rule frag_length_hist:
     message:

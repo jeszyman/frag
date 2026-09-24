@@ -24,8 +24,7 @@ healthy_libraries:
   - lib002
 
 end_motif:
-  n_motif: 4
-  n_reads: 1000
+  max_ends: null   # null counts every qualifying fragment end; an integer caps the count (subsampled by read name)
   seed: 42
 
 nmf:

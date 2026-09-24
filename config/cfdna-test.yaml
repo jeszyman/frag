@@ -23,8 +23,7 @@ healthy_libraries:
   - kh_01
 
 end_motif:
-  n_motif: 4
-  n_reads: 1000000
+  max_ends: null
   seed: 42
 
 nmf:

@@ -233,6 +233,7 @@ dependencies:
   - bwa
   - fastp
   - fastqc
+  - pytest=9.0.2
   - r-data.table
   - r-tidyverse
   - samtools
@@ -1303,126 +1304,145 @@ write_tsv(ratios, file = ratios_tsv)
 #+end_src
 
 *** End motifs
-**** Sample motifs
+An end motif is the 4 reference bases at the 5′ end of each read. Every paired, primary, mapped, non-duplicate read with MAPQ ≥ 30 (=samtools view -q 30 -f 1 -F 3340=) counts, both mates, so each fragment gives two ends. A plus-strand read gives reference =[start, start+4)=; a minus-strand read gives =[end-4, end)=, reverse-complemented by =bedtools getfasta -s=. 4-mers containing a non-ACGT base are counted in an =OTHER= row. The motif is read from the reference, not the read, so the definition also holds for EM-seq and bisulfite alignments.
+
+This replaces an extraction (=scripts/sample_motifs.sh=) that keyed the end on read number instead of strand. It took the leftmost 4 bases of read 1 and the rightmost 4 bases of read 2, reverse-complemented. When read 1 maps to the minus strand, both branches return the read's 3′ end, which lies inside the fragment whenever the fragment is longer than the read, about 40 % of motifs in Axel's and Peter's data (AAAA/TTTT at the top of the table instead of CCCA/CCTG/CCAG). Its subsample drew about 3x the target from the coordinate-sorted BAM and kept the first n with =head=, so later chromosomes were not sampled. It also used MAPQ ≥ 60 and kept duplicate, secondary and supplementary reads. The defect was identified at the [[file:~/meetings/chaudhuri-bioinfo-huddle/2026-09-23-notes.md][bioinfo huddle 2026-09-23]].
+
+The extractor and the matrix step are adapted from Axel's =extract_5p_motifs.sh= and =aggregate_motif_counts.py= (commit 7a5767ab1, 2026-09-18).
+
+Config =end_motif.max_ends= caps the number of ends counted per library; =null= (the default) counts every end. When set and the BAM holds more qualifying reads, =samtools view --subsample= keeps a fraction =max_ends / qualifying reads=, chosen by a hash of the read name with =end_motif.seed=, so both mates of a pair are kept or dropped together and the whole genome is sampled. The count is therefore about =max_ends=, not exactly. The option exists because the Lo group reports that classifier AUC stops improving above some number of ends; no value is set by default.
+
+**** End-motif counts
 #+begin_src snakemake
-rule frag_sample_motifs:
+rule frag_end_motifs:
     message:
-        "Sample 5-prime end motifs from filtered BAM"
+        "Count strand-aware 5-prime fragment-end 4-mers from filtered BAM"
     conda:
         CONDA_FRAG
     input:
         bam   = f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.filt.bam",
         fasta = f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa",
     log:
-        cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_sample_motifs.log",
+        cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_end_motifs.log",
     benchmark:
-        f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_sample_motifs.tsv"
+        f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_end_motifs.tsv"
     params:
-        n_motif = config.get("end_motif", {}).get("n_motif", 4),
-        n_reads = config.get("end_motif", {}).get("n_reads", 1000000),
-        seed    = config.get("end_motif", {}).get("seed", 42),
+        max_ends = config.get("end_motif", {}).get("max_ends") or 0,
+        seed     = config.get("end_motif", {}).get("seed", 42),
     threads:
         4
     output:
-        txt = f"{D_FRAG}/motifs/{{library_id}}.{{ref_name}}.motifs.txt",
+        tsv = f"{D_FRAG}/motifs/{{library_id}}.{{ref_name}}.motif_counts.tsv",
     shell:
         """
         exec &>> "{log.cmd}"
-        echo "[motifs] $(date) lib={wildcards.library_id} ref={wildcards.ref_name} threads={threads}"
+        echo "[end_motifs] $(date) lib={wildcards.library_id} ref={wildcards.ref_name} max_ends={params.max_ends}"
 
-        bash scripts/sample_motifs.sh \
-          "{input.bam}" "{input.fasta}" \
-          {params.n_motif} {params.n_reads} {params.seed} {threads} \
-          "{output.txt}"
+        bash scripts/frag_end_motifs.sh \
+          "{input.bam}" "{input.fasta}" "{output.tsv}" \
+          {threads} {params.max_ends} {params.seed}
         """
 #+end_src
 
-#+begin_src bash :tangle ./scripts/sample_motifs.sh
+#+begin_src bash :tangle ./scripts/frag_end_motifs.sh
 #!/usr/bin/env bash
 set -euo pipefail
 
-# sample_motifs.sh
-# Sample 5-prime end motifs from a filtered BAM file.
-# Extracts forward and reverse read motifs, writing to a single output.
-# Usage: sample_motifs.sh <bam> <fasta> <n_motif> <n_reads> <seed> <threads> <out.txt>
+# frag_end_motifs.sh
+# Count the 5' fragment-end 4-mer of every qualifying read, strand-aware and
+# read from the reference. Adapted from Axel's extract_5p_motifs.sh
+# (commit 7a5767ab1, 2026-09-18).
+#
+# Qualifying read: paired, primary, mapped, mate mapped, non-duplicate,
+# MAPQ >= 30 (samtools -q 30 -f 1 -F 3340). Both mates count, so each
+# fragment gives two ends. Plus-strand read: reference [start, start+4).
+# Minus-strand read: reference [end-4, end), reverse-complemented by
+# bedtools getfasta -s. 4-mers with a non-ACGT base are counted as OTHER.
+#
+# max_ends > 0 and fewer than the qualifying reads: samtools --subsample keeps
+# a fraction max_ends/qualifying reads, chosen by a hash of the read name, so
+# mates stay together and every chromosome is sampled. max_ends 0 counts all.
+#
+# Output: 256 rows "motif<TAB>count" (A<C<G<T order, zeros included), then
+# "OTHER<TAB>count".
+# Usage: frag_end_motifs.sh <bam> <fasta> <out.tsv> <threads> <max_ends> <seed>
 
 in_bam="$1"
 in_fasta="$2"
-n_motif="$3"
-n_reads="$4"
-seed="$5"
-threads="$6"
-out_merged="$7"
+out_tsv="$3"
+threads="$4"
+max_ends="$5"
+seed="$6"
 
-forward_motif() {
-    local in_bam="$1" seed="$2" threads="$3" n_reads="$4" in_fasta="$5" n_motif="$6"
-    local f_reads=$(( 3 * n_reads ))
-    local factor
-    factor=$(samtools idxstats "$in_bam" \
-        | cut -f3 \
-        | awk -v nreads="$f_reads" 'BEGIN {total=0} {total += $1} END {print nreads/total}')
+read_filter=(-q 30 -f 1 -F 3340)
 
-    # head causes SIGPIPE (141) upstream under pipefail; write to temp then process
-    local tmpbed
-    tmpbed=$(mktemp)
-    samtools view \
-        --with-header \
-        --min-MQ 60 \
-        --require-flags 65 \
-        --subsample "$factor" \
-        --subsample-seed "$seed" \
-        --threads "$threads" "$in_bam" \
-      | bedtools bamtobed -i stdin \
-      | head -n "$n_reads" > "$tmpbed" || true
+# Precondition: BAM holds reads.
+in_reads=$(samtools idxstats "$in_bam" 2>/dev/null | awk '{s += $3} END {print s+0}')
+if [[ "$in_reads" -eq 0 ]]; then
+  echo "ERROR: frag_end_motifs: $in_bam contains zero reads" >&2
+  exit 1
+fi
 
-    bedtools getfasta -bed "$tmpbed" -fi "$in_fasta" \
-      | sed "1d; n; d" \
-      | sed -E "s/(.{$n_motif}).*/\1/"
-    rm -f "$tmpbed"
-}
+# Precondition: BAM @SQ names overlap the FASTA index; getfasta otherwise
+# drops every interval.
+if [[ -f "${in_fasta}.fai" ]]; then
+  bam_sn=$(samtools view -H "$in_bam" | awk '$1=="@SQ" {sub("SN:","",$2); print $2}' | sort -u)
+  fai_chroms=$(cut -f1 "${in_fasta}.fai" | sort -u)
+  if [[ -z "$(comm -12 <(echo "$bam_sn") <(echo "$fai_chroms"))" ]]; then
+    echo "ERROR: frag_end_motifs: $in_bam @SQ and ${in_fasta}.fai share zero names" >&2
+    exit 1
+  fi
+fi
 
-reverse_motif() {
-    local in_bam="$1" seed="$2" threads="$3" n_reads="$4" in_fasta="$5" n_motif="$6"
-    local f_reads=$(( 3 * n_reads ))
-    local factor
-    factor=$(samtools idxstats "$in_bam" \
-        | cut -f3 \
-        | awk -v nreads="$f_reads" 'BEGIN {total=0} {total += $1} END {print nreads/total}')
+subsample=()
+if (( max_ends > 0 )); then
+  n_qual=$(samtools view -c "${read_filter[@]}" --threads "$threads" "$in_bam")
+  if (( n_qual > max_ends )); then
+    frac=$(awk -v m="$max_ends" -v n="$n_qual" 'BEGIN {printf "%.8f", m / n}')
+    subsample=(--subsample "$frac" --subsample-seed "$seed")
+    echo "[frag_end_motifs] subsampling $n_qual qualifying reads at fraction $frac" >&2
+  fi
+fi
 
-    local tmpbed
-    tmpbed=$(mktemp)
-    samtools view \
-        --with-header \
-        --min-MQ 60 \
-        --require-flags 129 \
-        --subsample "$factor" \
-        --subsample-seed "$seed" \
-        --threads "$threads" "$in_bam" \
-      | bedtools bamtobed -i stdin \
-      | head -n "$n_reads" > "$tmpbed" || true
+samtools view -b "${read_filter[@]}" ${subsample[@]+"${subsample[@]}"} --threads "$threads" "$in_bam" \
+  | bedtools bamtobed -i stdin \
+  | awk 'BEGIN {OFS="\t"}
+         $6=="+" {print $1, $2, $2+4, ".", ".", $6}
+         $6=="-" {if ($3 >= 4) print $1, $3-4, $3, ".", ".", $6}' \
+  | bedtools getfasta -fi "$in_fasta" -bed stdin -s -tab \
+  | awk -F'\t' '
+      {m = toupper($2); if (m ~ /^[ACGT][ACGT][ACGT][ACGT]$/) c[m]++; else other++}
+      END {
+        split("A C G T", b, " ")
+        for (i = 1; i <= 4; i++) for (j = 1; j <= 4; j++)
+          for (k = 1; k <= 4; k++) for (l = 1; l <= 4; l++) {
+            m = b[i] b[j] b[k] b[l]; print m "\t" c[m] + 0
+          }
+        print "OTHER\t" other + 0
+      }' > "$out_tsv"
 
-    bedtools getfasta -bed "$tmpbed" -fi "$in_fasta" \
-      | sed "1d; n; d" \
-      | sed -E "s/.*(.{$n_motif})/\1/" \
-      | tr ACGT TGCA \
-      | rev
-    rm -f "$tmpbed"
-}
-
-forward_motif "$in_bam" "$seed" "$threads" "$n_reads" "$in_fasta" "$n_motif" > "$out_merged"
-reverse_motif "$in_bam" "$seed" "$threads" "$n_reads" "$in_fasta" "$n_motif" >> "$out_merged"
+# Postcondition: 257 rows and at least one counted end.
+rows=$(wc -l < "$out_tsv")
+total=$(awk -F'\t' '{s += $2} END {print s+0}' "$out_tsv")
+if [[ "$rows" -ne 257 || "$total" -eq 0 ]]; then
+  echo "ERROR: frag_end_motifs: $out_tsv has $rows rows and $total ends" >&2
+  exit 1
+fi
+echo "[frag_end_motifs] OK: $total ends in $out_tsv" >&2
 #+end_src
 
 **** Motif matrix
+Joins the per-library count files into a motif x library count matrix and a fraction matrix (each library's counts over the 256 ACGT motifs divided by their sum, with =OTHER= excluded). Both keep motifs as rows and libraries as columns, the layout the motif-diversity and F-profile steps read.
+
 #+begin_src snakemake
 rule frag_motif_matrix:
     message:
-        "Build motif frequency matrix across libraries"
+        "Build motif count and fraction matrices across libraries"
     conda:
         CONDA_FRAG
     input:
-        txts = lambda wc: expand(
-            f"{D_FRAG}/motifs/{{library_id}}.{{ref_name}}.motifs.txt",
+        counts = lambda wc: expand(
+            f"{D_FRAG}/motifs/{{library_id}}.{{ref_name}}.motif_counts.tsv",
             library_id=FRAG_LIBRARY_IDS,
             ref_name=wc.ref_name,
         ),
@@ -1432,93 +1452,74 @@ rule frag_motif_matrix:
         f"{D_BENCHMARK}/{{ref_name}}_frag_motif_matrix.tsv"
     threads:
         1
+    wildcard_constraints:
+        # keeps {ref_name}.motif_counts.tsv from matching per-library count files
+        ref_name = r"[^.]+",
     output:
-        tsv = f"{D_FRAG}/motifs/{{ref_name}}.all_motifs.tsv",
+        counts = f"{D_FRAG}/motifs/{{ref_name}}.motif_counts.tsv",
+        tsv    = f"{D_FRAG}/motifs/{{ref_name}}.all_motifs.tsv",
     shell:
         """
         exec &>> "{log.cmd}"
         echo "[motif_matrix] $(date) ref={wildcards.ref_name}"
 
-        Rscript scripts/end_motif_mat.R \
-          "{input.txts}" "{output.tsv}"
+        python3 scripts/frag_motif_matrix.py \
+          "{output.counts}" "{output.tsv}" {input.counts}
         """
 #+end_src
 
-#+begin_src R :tangle ./scripts/end_motif_mat.R
-#!/usr/bin/env Rscript
+#+begin_src python :tangle ./scripts/frag_motif_matrix.py
+#!/usr/bin/env python3
+"""frag_motif_matrix.py: per-library end-motif count files to motif x library matrices.
 
-# -----------------------------------------------------------------------------
-# end_motif_mat.R — per-library 4-mer end-motif fraction matrix.
-# Input : motif_str — space-separated paths to per-library motif files
-# Output: motif_tsv — motif x library fraction matrix (all 256 4-mers)
-# -----------------------------------------------------------------------------
+Adapted from Axel's aggregate_motif_counts.py (commit 7a5767ab1). Unlike that
+script, both outputs keep motifs as rows and libraries as columns, the layout
+frag_motif_diversity.R and frag_fprofiles.py read.
 
-# =============================================================================
-# SECTION: PACKAGES
-# =============================================================================
+Usage:
+    frag_motif_matrix.py <counts_out.tsv> <fractions_out.tsv> <count_file>...
 
-packages <- c("tidyverse")
-suppressPackageStartupMessages(
-  invisible(lapply(packages, require, character.only = TRUE))
-)
-source("scripts/frag_checks.R")
+Each count file is frag_end_motifs.sh output named {library_id}.{ref_name}.motif_counts.tsv.
+counts_out: integer counts, 256 ACGT 4-mers. fractions_out: counts divided by each
+library's total over those 256 motifs (the OTHER row is excluded).
+"""
+import os
+import re
+import sys
+from itertools import product
 
-# =============================================================================
-# SECTION: ARGUMENT PARSING
-# =============================================================================
+import pandas as pd
 
-# Positional args (repo convention): Snakemake passes input then output.
-args <- commandArgs(trailingOnly = TRUE)
-motif_str <- args[1]
-motif_tsv <- args[2]
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from frag_checks import check_n, log_n  # noqa: E402
 
-# =============================================================================
-# SECTION: WORK FUNCTIONS
-# =============================================================================
+MOTIFS = ["".join(p) for p in product("ACGT", repeat=4)]
 
-#' All 256 possible 4-mers, sorted.
-#'
-#' @return Tibble (motif).
-build_possible_motifs <- function() {
-  expand.grid(rep(list(c("A", "G", "T", "C")), 4)) %>%
-    as_tibble() %>%
-    mutate(motif = paste0(Var1, Var2, Var3, Var4)) %>%
-    select(motif) %>%
-    arrange(motif)
-}
 
-#' Read one library's motif calls and return per-motif fraction.
-#'
-#' @param motif_file Path to a motif file (one motif per line).
-#' @return Tibble (motif, fract).
-ingest_motif <- function(motif_file) {
-  read_tsv(motif_file, col_names = c("motif")) %>%
-    check_nonempty("motifs") %>%
-    group_by(motif) %>%
-    summarise(count = n()) %>%
-    mutate(fract = count / sum(count)) %>%
-    select(motif, fract)
-}
+def library_id(path):
+    """Library id: file name without the trailing .{ref_name}.motif_counts.tsv."""
+    return re.sub(r"\.[^.]+\.motif_counts\.tsv$", "", os.path.basename(path))
 
-# =============================================================================
-# SECTION: BODY
-# =============================================================================
 
-possible_motifs <- build_possible_motifs()
+def read_counts(path):
+    """One library's counts over the 256 ACGT motifs, in MOTIFS order."""
+    d = pd.read_csv(path, sep="\t", header=None, names=["motif", "count"], index_col="motif")
+    check_n(d, 257, f"{path} rows")
+    counts = d["count"].reindex(MOTIFS)
+    if counts.isna().any() or counts.sum() == 0:
+        raise ValueError(f"[check] {path}: empty or missing motif rows")
+    return counts.astype(int)
 
-motif_files <- strsplit(motif_str, " ")[[1]]
-# Extract library_id from {library_id}.{ref_name}.motifs.txt
-names(motif_files) <- basename(motif_files) %>%
-  sub("\\.[^.]+\\.motifs\\.txt$", "", .)
 
-motif_tibs <- lapply(motif_files, ingest_motif)
+counts_out, fractions_out, *count_files = sys.argv[1:]
+if not count_files:
+    sys.exit("[FAIL] no count files given")
 
-motifs <- bind_rows(motif_tibs, .id = "library") %>%
-  pivot_wider(names_from = library, values_from = fract) %>%
-  filter(motif %in% possible_motifs$motif)
-log_n(motifs, "motif matrix")
-
-write_tsv(motifs, motif_tsv)
+counts = pd.DataFrame({library_id(f): read_counts(f) for f in count_files})
+counts.index.name = "motif"
+log_n(counts, "motif count matrix rows")
+counts.to_csv(counts_out, sep="\t")
+(counts / counts.sum()).to_csv(fractions_out, sep="\t")
 #+end_src
 
 *** Fragment length histograms
@@ -3013,8 +3014,7 @@ healthy_libraries:
   - lib002
 
 end_motif:
-  n_motif: 4
-  n_reads: 1000
+  max_ends: null   # null counts every qualifying fragment end; an integer caps the count (subsampled by read name)
   seed: 42
 
 nmf:
@@ -3187,11 +3187,15 @@ rule all:
         ),
         # End motifs per library
         expand(
-            f"{D_FRAG}/motifs/{{library_id}}.{{ref_name}}.motifs.txt",
+            f"{D_FRAG}/motifs/{{library_id}}.{{ref_name}}.motif_counts.tsv",
             library_id=FRAG_LIBRARY_IDS,
             ref_name=frag_ref_names,
         ),
-        # Motif matrix
+        # Motif count and fraction matrices
+        expand(
+            f"{D_FRAG}/motifs/{{ref_name}}.motif_counts.tsv",
+            ref_name=frag_ref_names,
+        ),
         expand(
             f"{D_FRAG}/motifs/{{ref_name}}.all_motifs.tsv",
             ref_name=frag_ref_names,
@@ -3280,6 +3284,304 @@ include: "frag.smk"
 
 #+end_src
 
+*** Unit tests
+Known-answer tests for the end-motif scripts, run with =python -m pytest -q tests/unit= from the repository root. =conftest.py= puts =scripts/= on the Python path. The extractor tests build a 400 bp synthetic contig and a BAM from hand-written SAM records, and compute each expected motif by slicing the contig directly, independent of the script's samtools/bedtools route. They cover read 1 and read 2 on each strand (including the read-1-minus case that read-number keying gets wrong), duplicate, secondary, supplementary, mate-unmapped and MAPQ 29 reads (excluded), a soft-clipped read, an end whose 4-mer contains N (counted in =OTHER=), and the =max_ends= subsampling rule. Tests that need samtools and bedtools skip when those are not on PATH. The matrix tests check orientation (motifs as rows, libraries as columns in the order given), values, fractions summing to 1, and library ids containing dots.
+
+#+begin_src python :tangle ./tests/unit/conftest.py :mkdirp yes
+"""pytest setup: put scripts/ on sys.path so tests can import frag's Python scripts."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+#+end_src
+
+#+begin_src python :tangle ./tests/unit/test_end_motifs.py :mkdirp yes
+"""Known-answer tests for scripts/frag_end_motifs.sh.
+
+A 400 bp synthetic contig and a hand-written SAM give exact expected counts.
+The expected motifs are computed here by slicing the contig directly, which
+is independent of the script's samtools/bedtools route.
+"""
+import random
+import shutil
+import subprocess
+from collections import Counter
+from itertools import product
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parents[2]
+SCRIPT = REPO / "scripts" / "frag_end_motifs.sh"
+MOTIFS = ["".join(p) for p in product("ACGT", repeat=4)]
+READ_LEN = 30
+
+pytestmark = pytest.mark.skipif(
+    not (shutil.which("samtools") and shutil.which("bedtools")),
+    reason="samtools and bedtools must be on PATH",
+)
+
+
+def make_ref():
+    rng = random.Random(7)
+    seq = [rng.choice("ACGT") for _ in range(400)]
+    seq[300:304] = list("NNNN")  # the 5' 4-mer of a read starting at 301 contains N
+    return "".join(seq)
+
+
+REF = make_ref()
+COMP = str.maketrans("ACGTN", "TGCAN")
+
+
+def revcomp(s):
+    return s.translate(COMP)[::-1]
+
+
+def plus_motif(pos1):
+    """5' 4-mer of a plus-strand read whose leftmost aligned base is 1-based pos1."""
+    return REF[pos1 - 1 : pos1 + 3]
+
+
+def minus_motif(pos1, aligned_len=READ_LEN):
+    """5' 4-mer of a minus-strand read: last 4 aligned bases, reverse-complemented."""
+    end = pos1 - 1 + aligned_len
+    return revcomp(REF[end - 4 : end])
+
+
+def rec(name, flag, pos, mapq=60, cigar="30M", pnext=0):
+    return f"{name}\t{flag}\tchrT\t{pos}\t{mapq}\t{cigar}\t=\t{pnext}\t0\t*\t*"
+
+
+def pair(name, f1, p1, f2, p2, mapq=60, cigar1="30M"):
+    return [rec(name, f1, p1, mapq, cigar1, p2), rec(name, f2, p2, mapq, "30M", p1)]
+
+
+# Each entry: SAM lines, and the ends the definition counts from them.
+CASES = {
+    "r1_plus": (pair("r1_plus", 99, 11, 147, 151), [plus_motif(11), minus_motif(151)]),
+    # Read 1 on the minus strand: the case read-number keying gets wrong.
+    "r1_minus": (pair("r1_minus", 83, 201, 163, 61), [minus_motif(201), plus_motif(61)]),
+    "duplicate": (pair("dup", 99 + 1024, 21, 147 + 1024, 121), []),
+    "secondary": ([rec("sec", 99 + 256, 31, pnext=131)], []),
+    "supplementary": ([rec("supp", 99 + 2048, 41, pnext=141)], []),
+    "mate_unmapped": ([rec("mu", 73, 51, pnext=51), rec("mu", 133, 51, mapq=0, cigar="*", pnext=51)], []),
+    "mapq29": (pair("lowq", 99, 71, 147, 171, mapq=29), []),
+    # QC-fail (0x200) reads are kept, as in the reference implementation.
+    "qcfail": (pair("qcf", 99 + 512, 131, 147 + 512, 260), [plus_motif(131), minus_motif(260)]),
+    # Soft clip: the end is the first aligned base, not the clipped read start.
+    "softclip": (pair("sc", 99, 101, 147, 250, cigar1="5S25M"), [plus_motif(101), minus_motif(250)]),
+    "n_end": (pair("nend", 99, 301, 147, 351), ["OTHER", minus_motif(351)]),
+}
+
+
+def write_fixture(tmp_path, sam_lines):
+    fa = tmp_path / "ref.fa"
+    fa.write_text(">chrT\n" + REF + "\n")
+    subprocess.run(["samtools", "faidx", str(fa)], check=True)
+    sam = tmp_path / "in.sam"
+    sam.write_text("@HD\tVN:1.6\tSO:unsorted\n@SQ\tSN:chrT\tLN:400\n" + "\n".join(sam_lines) + "\n")
+    bam = tmp_path / "in.bam"
+    subprocess.run(["samtools", "sort", "-o", str(bam), str(sam)], check=True)
+    subprocess.run(["samtools", "index", str(bam)], check=True)
+    return bam, fa
+
+
+def run_script(tmp_path, bam, fa, max_ends=0, seed=42, name="out.tsv"):
+    out = tmp_path / name
+    subprocess.run(
+        ["bash", str(SCRIPT), str(bam), str(fa), str(out), "1", str(max_ends), str(seed)],
+        check=True,
+    )
+    rows = [line.split("\t") for line in out.read_text().splitlines()]
+    return rows, {m: int(c) for m, c in rows}
+
+
+@pytest.fixture
+def all_cases(tmp_path):
+    lines, expected = [], Counter()
+    for sam_lines, ends in CASES.values():
+        lines += sam_lines
+        expected.update(ends)
+    bam, fa = write_fixture(tmp_path, lines)
+    return tmp_path, bam, fa, expected
+
+
+def test_output_layout(all_cases):
+    tmp_path, bam, fa, _ = all_cases
+    rows, _ = run_script(tmp_path, bam, fa)
+    assert [r[0] for r in rows] == MOTIFS + ["OTHER"]
+
+
+def test_known_answer_counts(all_cases):
+    tmp_path, bam, fa, expected = all_cases
+    _, got = run_script(tmp_path, bam, fa)
+    want = {m: expected.get(m, 0) for m in MOTIFS + ["OTHER"]}
+    assert got == want
+
+
+def test_read1_minus_takes_fragment_5prime_end(tmp_path):
+    """Read-number keying takes read 1's leftmost 4 bases and read 2's rightmost 4
+    bases reverse-complemented; for a read-1-minus pair both are read 3' ends,
+    interior to the fragment. Neither may appear in the output."""
+    bam, fa = write_fixture(tmp_path, CASES["r1_minus"][0])
+    _, got = run_script(tmp_path, bam, fa)
+    true_ends = Counter([minus_motif(201), plus_motif(61)])
+    interior = {REF[200:204], revcomp(REF[86:90])}
+    assert not interior & set(true_ends), "fixture seed makes an interior motif equal a true end"
+    assert {m: c for m, c in got.items() if c} == dict(true_ends)
+    assert all(got[m] == 0 for m in interior)
+
+
+def many_pairs(n, seed=3):
+    rng = random.Random(seed)
+    lines = []
+    for i in range(n):
+        p1 = rng.randint(1, 170)
+        p2 = rng.randint(p1, 340)
+        lines += pair(f"q{i}", 99, p1, 147, p2)
+    return lines
+
+
+def test_max_ends_zero_counts_all(tmp_path):
+    bam, fa = write_fixture(tmp_path, many_pairs(500))
+    _, got = run_script(tmp_path, bam, fa, max_ends=0)
+    assert sum(got.values()) == 1000
+
+
+def test_max_ends_above_total_equals_all(tmp_path):
+    bam, fa = write_fixture(tmp_path, many_pairs(500))
+    _, all_ends = run_script(tmp_path, bam, fa, max_ends=0, name="a.tsv")
+    _, capped = run_script(tmp_path, bam, fa, max_ends=10**9, name="b.tsv")
+    assert capped == all_ends
+
+
+def test_subsample_keeps_mates_together_and_is_seeded(tmp_path):
+    bam, fa = write_fixture(tmp_path, many_pairs(2000))
+    _, a = run_script(tmp_path, bam, fa, max_ends=1000, seed=42, name="a.tsv")
+    _, b = run_script(tmp_path, bam, fa, max_ends=1000, seed=42, name="b.tsv")
+    total = sum(a.values())
+    assert 0 < total < 4000
+    assert total % 2 == 0  # every counted pair contributes both mates
+    assert a == b
+#+end_src
+
+#+begin_src python :tangle ./tests/unit/test_motif_matrix.py :mkdirp yes
+"""Tests for scripts/frag_motif_matrix.py: layout, orientation, values."""
+import subprocess
+import sys
+from itertools import product
+from pathlib import Path
+
+import pandas as pd
+
+REPO = Path(__file__).resolve().parents[2]
+SCRIPT = REPO / "scripts" / "frag_motif_matrix.py"
+MOTIFS = ["".join(p) for p in product("ACGT", repeat=4)]
+
+
+def write_counts(path, counts, other=0):
+    lines = [f"{m}\t{counts.get(m, 0)}" for m in MOTIFS] + [f"OTHER\t{other}"]
+    path.write_text("\n".join(lines) + "\n")
+
+
+def run(tmp_path, files):
+    c_out, f_out = tmp_path / "counts.tsv", tmp_path / "fractions.tsv"
+    subprocess.run(
+        [sys.executable, str(SCRIPT), str(c_out), str(f_out), *map(str, files)],
+        check=True,
+    )
+    return pd.read_csv(c_out, sep="\t"), pd.read_csv(f_out, sep="\t")
+
+
+def two_libraries(tmp_path):
+    a = tmp_path / "libA.chrT.motif_counts.tsv"
+    b = tmp_path / "libB.chrT.motif_counts.tsv"
+    write_counts(a, {"CCCA": 3, "AAAA": 1}, other=5)
+    write_counts(b, {"CCTG": 2, "TTTT": 2})
+    return [a, b]
+
+
+def test_orientation(tmp_path):
+    counts, fracs = run(tmp_path, two_libraries(tmp_path))
+    for df in (counts, fracs):
+        assert list(df.columns) == ["motif", "libA", "libB"]
+        assert list(df["motif"]) == MOTIFS
+        assert len(df) == 256
+
+
+def test_values(tmp_path):
+    counts, fracs = run(tmp_path, two_libraries(tmp_path))
+    c = counts.set_index("motif")
+    f = fracs.set_index("motif")
+    assert c.loc["CCCA", "libA"] == 3 and c.loc["AAAA", "libA"] == 1
+    assert c["libA"].sum() == 4  # OTHER is not a motif row
+    assert f.loc["CCCA", "libA"] == 0.75
+    assert f.loc["CCTG", "libB"] == 0.5
+    assert abs(f.sum() - 1).max() < 1e-12
+
+
+def test_library_id_with_dot(tmp_path):
+    p = tmp_path / "kh_01.rep.2.ncbi_hg38.motif_counts.tsv"
+    write_counts(p, {"CCCA": 1})
+    counts, _ = run(tmp_path, [p])
+    assert list(counts.columns) == ["motif", "kh_01.rep.2"]
+
+
+def test_library_with_no_ends_fails(tmp_path):
+    p = tmp_path / "empty.chrT.motif_counts.tsv"
+    write_counts(p, {}, other=3)
+    res = subprocess.run(
+        [sys.executable, str(SCRIPT), str(tmp_path / "c.tsv"), str(tmp_path / "f.tsv"), str(p)],
+        capture_output=True, text=True,
+    )
+    assert res.returncode != 0
+    assert "empty" in res.stderr
+#+end_src
+
+** Validation
+Checks of the pipeline on real, full-genome data. These run on jeff-beast against data that is not in the repository and are not part of CI.
+
+*** End-motif extraction on kh_01
+The strand-aware extractor (=scripts/frag_end_motifs.sh=) was compared with the read-number-keyed extraction it replaces (=scripts/sample_motifs.sh= at commit 499bb26) on the healthy full-genome library kh_01 (NovaSeq X, filtered BAM =/mnt/data/projects/cfdna/frag/bams/kh_01.bwa.ncbi_hg38.filt.bam=, reference =/mnt/data/projects/cfdna/frag/ref/bwa/ncbi_hg38/ncbi_hg38.fa=). Three runs were made in =/mnt/data/projects/cfdna/frag/validation/end_motifs_2026-09-24/= on [2026-09-24 Thu]: the new extractor counting every end (=max_ends= 0), the new extractor with =max_ends= 10,000,000 (seed 42), and the old script with its default 1,000,000 reads per mate.
+
+#+begin_example
+bash frag_end_motifs.sh $B $F kh_01.all.tsv 8 0 42
+bash frag_end_motifs.sh $B $F kh_01.10M.tsv 8 10000000 42
+bash sample_motifs_old.sh $B $F 4 1000000 42 8 kh_01.old.txt
+python3 end_motif_summary.py kh_01.all.tsv kh_01.10M.tsv kh_01.old.tsv
+#+end_example
+
+=tools/end_motif_summary.py= reports, per count file, the total ends, the =OTHER= count, the CC-end share (the 16 =CC..= motifs over all ACGT motifs, about 0.11 to 0.12 in plasma cfDNA under the strand-aware definition), the five most frequent motifs, and the Pearson r of the 256 motif fractions against the first file.
+
+#+begin_src python :tangle ./tools/end_motif_summary.py :mkdirp yes
+#!/usr/bin/env python3
+"""end_motif_summary.py: compare end-motif count files (frag_end_motifs.sh format).
+
+Usage: end_motif_summary.py <count_file>...
+Prints one TSV row per file: total ends, OTHER count, CC-end share (sum of the
+16 CC.. motifs over all ACGT motifs), five most frequent motifs, and the
+Pearson r of its 256 motif fractions against the first file.
+"""
+import sys
+
+import pandas as pd
+
+files = sys.argv[1:]
+fracs = {}
+print("file\ttotal_ends\tother\tcc_share\ttop5\tpearson_r_vs_first")
+for f in files:
+    d = pd.read_csv(f, sep="\t", header=None, index_col=0)[1]
+    m = d.drop("OTHER")
+    fr = m / m.sum()
+    fracs[f] = fr
+    cc = fr[fr.index.str.startswith("CC")].sum()
+    top5 = ",".join(fr.sort_values(ascending=False).index[:5])
+    r = fr.corr(fracs[files[0]])
+    print(f"{f}\t{int(d.sum())}\t{int(d['OTHER'])}\t{cc:.4f}\t{top5}\t{r:.4f}")
+#+end_src
+
+Results are recorded below when the runs finish.
+
 ** Fragment Length Window Optimization for cfDNA ctDNA Enrichment :bioinfo-dev:
 :PROPERTIES:
 :ID:       61d07182-2526-484b-a889-b07cb9f0c8de
@@ -3317,8 +3619,8 @@ Lilli Senders analyzed cfDNA fragment length enrichment in 28 sarcoma (Ewing and
 
 Pre-computed outputs from Lilli Senders are at [[file:/mnt/gcs/lilli/ewing/analysis_bundle/permutation_bootstrap_jeff][permutation_bootstrap_jeff/]]. All fragment length bins span 50–450 bp (401 bins, 1 bp resolution). Frequencies are already normalized to sum to 1 per sample.
 
-| File                                  | Contents                                              |
-|---------------------------------------+-------------------------------------------------------|
+| File                                | Contents                                              |
+|-------------------------------------+-------------------------------------------------------|
 | =per_bam_fragment_frequencies.tsv=    | 45 samples × 401 bins, per-sample normalized freq     |
 | =fragment_enrichment_curve.tsv=       | Enrichment ratio, p_cancer, p_healthy per length      |
 | =per_base_permutation_thresholds.tsv= | Per-base 95th percentile null thresholds (401 values) |

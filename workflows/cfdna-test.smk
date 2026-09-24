@@ -153,11 +153,15 @@ rule all:
         ),
         # End motifs per library
         expand(
-            f"{D_FRAG}/motifs/{{library_id}}.{{ref_name}}.motifs.txt",
+            f"{D_FRAG}/motifs/{{library_id}}.{{ref_name}}.motif_counts.tsv",
             library_id=FRAG_LIBRARY_IDS,
             ref_name=frag_ref_names,
         ),
-        # Motif matrix
+        # Motif count and fraction matrices
+        expand(
+            f"{D_FRAG}/motifs/{{ref_name}}.motif_counts.tsv",
+            ref_name=frag_ref_names,
+        ),
         expand(
             f"{D_FRAG}/motifs/{{ref_name}}.all_motifs.tsv",
             ref_name=frag_ref_names,
