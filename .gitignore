@@ -5,9 +5,17 @@
 **/.cache
 **/.config
 **/.java
-# Pipeline outputs
+# --- biopipe-specific ignores (module template) ---
+
+# Pipeline logs and benchmarks (the fixture writes them under tests/full/)
 tests/benchmark/
 tests/logs/
+
+# Snakemake
+.snakemake/
+
+# Tangled backup files
+*.org~
 
 # --- test data (auto-managed by get_test_data.sh) ---
 tests/full/*

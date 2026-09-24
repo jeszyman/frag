@@ -4,10 +4,10 @@ conda:
 directories:
   inputs: tests/full/inputs
   frag: tests/full
-  logs: tests/logs
-  benchmark: tests/benchmark
+  logs: tests/full/logs
+  benchmark: tests/full/benchmark
 
-sample-tsv-path: config/samples.tsv
+sample-tsv-path: config/samples_test.tsv
 
 frag_ref_assemblies:
   chr22:

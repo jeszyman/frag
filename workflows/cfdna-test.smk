@@ -21,6 +21,29 @@ def resolve_config_paths(config_dict):
 
 resolve_config_paths(config)
 
+def check_config(cfg, schema_path):
+    # Report every schema violation and every undeclared top-level key in one
+    # pass, then stop on violations, so a config is fixed in one round rather
+    # than one missing key per run.
+    import sys
+    import yaml
+    import jsonschema
+    from snakemake.exceptions import WorkflowError
+    with open(schema_path) as fh:
+        schema = yaml.safe_load(fh)
+    errors = sorted(jsonschema.Draft202012Validator(schema).iter_errors(cfg),
+                    key=lambda e: [str(p) for p in e.absolute_path])
+    for e in errors:
+        where = "/".join(str(p) for p in e.absolute_path) or "<root>"
+        print(f"config error at {where}: {e.message}", file=sys.stderr)
+    for k in sorted(set(cfg) - set(schema.get("properties", {}))):
+        print(f"config warning: key '{k}' is not declared in {schema_path}; the workflow does not read it", file=sys.stderr)
+    if errors:
+        raise WorkflowError(f"{len(errors)} config error(s) listed above")
+
+# workflow.current_basedir is this file's directory, whichever Snakefile included it.
+check_config(config, os.path.join(workflow.current_basedir, "..", "config", "config.schema.yaml"))
+
 # ------------------------------------------------------------------------------
 # Constants
 # ------------------------------------------------------------------------------

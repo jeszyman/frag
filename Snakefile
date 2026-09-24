@@ -1,0 +1,1 @@
+include: "workflows/test.smk"

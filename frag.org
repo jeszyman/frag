@@ -245,6 +245,145 @@ dependencies:
   - sra-tools=3.4.1
 #+end_src
 
+** Pipeline configuration
+A run is configured by one YAML file, checked at startup against =config/config.schema.yaml= by =check_config()= in the wrapper, which lists every violation and every undeclared top-level key in one pass and then stops. =config/common.yaml= is a template with placeholder paths for a new project; =config/test.yaml= (under Testing) configures the chr22 fixture. The sample sheet has one row per library (=r1_basename=, =r2_basename= relative to =directories.inputs=, =library_id=, =cohort=); =config/samples.tsv= is its template and =config/samples_test.tsv= the fixture sheet.
+
+*** Config schema
+#+begin_src yaml :tangle ./config/config.schema.yaml
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: frag wrapper configuration (workflows/test.smk, workflows/cfdna-test.smk)
+type: object
+required: [conda, directories, sample-tsv-path, frag_ref_assemblies, gc5mb, blklist, cytoband]
+properties:
+  conda:
+    type: object
+    required: [frag]
+    additionalProperties: false
+    properties:
+      frag: {type: string, description: "frag conda env yaml, relative to workflows/ or absolute"}
+  directories:
+    type: object
+    required: [inputs, frag, logs, benchmark]
+    additionalProperties: false
+    properties:
+      inputs: {type: string, description: directory holding the raw FASTQs and the reference FASTA}
+      frag: {type: string, description: output root}
+      logs: {type: string, description: per-rule logs}
+      benchmark: {type: string, description: per-rule benchmarks}
+  sample-tsv-path:
+    type: string
+    description: "sample sheet (r1_basename, r2_basename, library_id, cohort), relative to the run directory"
+  frag_ref_assemblies:
+    type: object
+    minProperties: 1
+    description: "reference name -> assembly; the name is the {ref_name} wildcard and must not contain a dot"
+    propertyNames: {pattern: "^[^.]+$"}
+    additionalProperties:
+      type: object
+      required: [input]
+      additionalProperties: false
+      properties:
+        url: {type: string, description: source of the FASTA (documentation only)}
+        name: {type: string}
+        input: {type: string, description: "reference FASTA (.fa.gz) under directories.inputs"}
+  gc5mb: {type: string, description: BED of GC/mappability-restricted regions}
+  blklist: {type: string, description: blacklist BED (.bed or .bed.gz)}
+  cytoband: {type: string, description: UCSC cytoBand table for chromosome arms}
+  healthy_libraries:
+    type: array
+    items: {type: string}
+    description: library ids used as the healthy reference (GC summary, arm z-scores)
+  fastp:
+    type: object
+    additionalProperties: false
+    properties:
+      extra: {type: string, description: extra fastp arguments}
+  end_motif:
+    type: object
+    additionalProperties: false
+    properties:
+      max_ends:
+        type: ["integer", "null"]
+        minimum: 1
+        description: "cap on the ends counted per library, by read-name-hash subsampling; null counts every end"
+      seed: {type: integer, description: subsample seed}
+  length_hist:
+    type: object
+    additionalProperties: false
+    properties:
+      start: {type: integer, minimum: 0, description: shortest fragment length in the histograms (bp)}
+      end: {type: integer, minimum: 1, description: longest fragment length in the histograms (bp)}
+  nmf:
+    type: object
+    additionalProperties: false
+    properties:
+      n_components: {type: integer, minimum: 1}
+  fprofiles:
+    type: object
+    additionalProperties: false
+    properties:
+      n_components: {type: integer, minimum: 1}
+#+end_src
+
+*** Config template
+#+begin_src yaml :tangle ./config/common.yaml
+# frag configuration template. Replace every /path/to value; paths expand ${HOME}.
+conda:
+  frag: "../envs/frag-conda-env.yaml"
+
+directories:
+  inputs: /path/to/inputs
+  frag: /path/to/frag
+  logs: /path/to/frag/logs
+  benchmark: /path/to/frag/benchmark
+
+sample-tsv-path: config/samples.tsv
+
+frag_ref_assemblies:
+  ncbi_hg38:
+    url: https://ftp.ncbi.nlm.nih.gov/genomes/all/GCA/000/001/405/GCA_000001405.15_GRCh38/seqs_for_alignment_pipelines.ucsc_ids/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.gz
+    name: ncbi_hg38
+    input: GCA_000001405.15_GRCh38_no_alt_analysis_set.fa.gz
+
+gc5mb: /path/to/hg38_regions.bed
+blklist: /path/to/hg38-blacklist.v2.bed.gz
+cytoband: /path/to/cytoBand.txt
+
+healthy_libraries:
+  - sample1
+
+fastp:
+  extra: ""
+
+end_motif:
+  max_ends: null   # null counts every qualifying fragment end; an integer caps the count
+  seed: 42
+
+length_hist:
+  start: 30
+  end: 700
+
+nmf:
+  n_components: 2
+
+fprofiles:
+  n_components: 6
+#+end_src
+
+*** Sample sheet template
+#+begin_src text :tangle ./config/samples.tsv
+r1_basename	r2_basename	library_id	cohort
+SAMPLE1_R1.fastq.gz	SAMPLE1_R2.fastq.gz	sample1	healthy
+SAMPLE2_R1.fastq.gz	SAMPLE2_R2.fastq.gz	sample2	cancer
+#+end_src
+
+*** Root Snakefile
+The root =Snakefile= runs the fixture wrapper, so =snakemake --configfile config/test.yaml= from the repository root runs the test pipeline.
+
+#+begin_src snakemake :tangle ./Snakefile
+include: "workflows/test.smk"
+#+end_src
+
 ** Fragmentomics sequence processing
 :PROPERTIES:
 :header-args:snakemake: :tangle ./workflows/frag.smk
@@ -3016,10 +3155,10 @@ conda:
 directories:
   inputs: tests/full/inputs
   frag: tests/full
-  logs: tests/logs
-  benchmark: tests/benchmark
+  logs: tests/full/logs
+  benchmark: tests/full/benchmark
 
-sample-tsv-path: config/samples.tsv
+sample-tsv-path: config/samples_test.tsv
 
 frag_ref_assemblies:
   chr22:
@@ -3076,6 +3215,29 @@ def resolve_config_paths(config_dict):
             config_dict[k] = [os.path.expandvars(os.path.expanduser(i)) if isinstance(i, str) else i for i in v]
 
 resolve_config_paths(config)
+
+def check_config(cfg, schema_path):
+    # Report every schema violation and every undeclared top-level key in one
+    # pass, then stop on violations, so a config is fixed in one round rather
+    # than one missing key per run.
+    import sys
+    import yaml
+    import jsonschema
+    from snakemake.exceptions import WorkflowError
+    with open(schema_path) as fh:
+        schema = yaml.safe_load(fh)
+    errors = sorted(jsonschema.Draft202012Validator(schema).iter_errors(cfg),
+                    key=lambda e: [str(p) for p in e.absolute_path])
+    for e in errors:
+        where = "/".join(str(p) for p in e.absolute_path) or "<root>"
+        print(f"config error at {where}: {e.message}", file=sys.stderr)
+    for k in sorted(set(cfg) - set(schema.get("properties", {}))):
+        print(f"config warning: key '{k}' is not declared in {schema_path}; the workflow does not read it", file=sys.stderr)
+    if errors:
+        raise WorkflowError(f"{len(errors)} config error(s) listed above")
+
+# workflow.current_basedir is this file's directory, whichever Snakefile included it.
+check_config(config, os.path.join(workflow.current_basedir, "..", "config", "config.schema.yaml"))
 
 # ------------------------------------------------------------------------------
 # Constants
@@ -3641,6 +3803,29 @@ def resolve_config_paths(config_dict):
             config_dict[k] = [os.path.expandvars(os.path.expanduser(i)) if isinstance(i, str) else i for i in v]
 
 resolve_config_paths(config)
+
+def check_config(cfg, schema_path):
+    # Report every schema violation and every undeclared top-level key in one
+    # pass, then stop on violations, so a config is fixed in one round rather
+    # than one missing key per run.
+    import sys
+    import yaml
+    import jsonschema
+    from snakemake.exceptions import WorkflowError
+    with open(schema_path) as fh:
+        schema = yaml.safe_load(fh)
+    errors = sorted(jsonschema.Draft202012Validator(schema).iter_errors(cfg),
+                    key=lambda e: [str(p) for p in e.absolute_path])
+    for e in errors:
+        where = "/".join(str(p) for p in e.absolute_path) or "<root>"
+        print(f"config error at {where}: {e.message}", file=sys.stderr)
+    for k in sorted(set(cfg) - set(schema.get("properties", {}))):
+        print(f"config warning: key '{k}' is not declared in {schema_path}; the workflow does not read it", file=sys.stderr)
+    if errors:
+        raise WorkflowError(f"{len(errors)} config error(s) listed above")
+
+# workflow.current_basedir is this file's directory, whichever Snakefile included it.
+check_config(config, os.path.join(workflow.current_basedir, "..", "config", "config.schema.yaml"))
 
 # ------------------------------------------------------------------------------
 # Constants
