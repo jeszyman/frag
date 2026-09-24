@@ -2,8 +2,9 @@
 set -euo pipefail
 
 # filter_alignments.sh
-# Filter BAM to MAPQ>=30 reads within keep-bed regions, fixmate, and re-sort.
-# Usage: filter_alignments.sh <in.bam> <keep.bed> <threads> <out.bam>
+# Keep primary, mapped, non-duplicate reads with MAPQ >= 30 inside the read
+# regions (samtools view -q 30 -F 3332 -L), fixmate, and re-sort.
+# Usage: filter_alignments.sh <in.bam> <read_regions.bed> <threads> <out.bam>
 
 in_bam="$1"
 keep_bed="$2"
@@ -30,7 +31,7 @@ fi
 sort_tmp="${TMPDIR_SAMTOOLS:-${TMPDIR:-/tmp}}/samtools_sort.$$"
 mkdir -p "$(dirname "$sort_tmp")"
 
-samtools view -@ "$threads" -b -h -L "$keep_bed" -q 30 "$in_bam" \
+samtools view -@ "$threads" -b -h -L "$keep_bed" -q 30 -F 3332 "$in_bam" \
   | samtools sort -@ "$threads" -n -T "${sort_tmp}.name" -o - - \
   | samtools fixmate -@ "$threads" - - \
   | samtools sort -@ "$threads" -T "${sort_tmp}.coord" -o "$out_bam" -

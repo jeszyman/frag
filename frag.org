@@ -690,16 +690,101 @@ touch "$sentinel"
 echo "[check_ids] ALL OK — sentinel written to $sentinel" >&2
 #+end_src
 
+**** Read regions
+The filtered BAM keeps reads on the autosomes (chr1 to chr22) outside blacklisted bases. The regions are the autosome intervals of the reference index minus every base of the blacklist, sorted and merged, so only the blacklisted bases are removed, not the 5 Mb windows that contain them. Sex chromosomes, chrM, chrEBV and alt, random and decoy contigs are left out.
+
+#+begin_src snakemake
+rule frag_read_regions:
+    message:
+        "Autosome regions minus blacklisted bases for the filtered BAM"
+    conda:
+        CONDA_FRAG
+    input:
+        fai     = f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa.fai",
+        blklist = FRAG_BLKLIST,
+        ids_ok  = f"{D_FRAG}/ref/{{ref_name}}.ids_verified.ok",
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_read_regions.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_frag_read_regions.tsv"
+    threads:
+        1
+    output:
+        bed = f"{D_FRAG}/ref/{{ref_name}}.read_regions.bed",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[read_regions] $(date) ref={wildcards.ref_name}"
+
+        bash scripts/frag_read_regions.sh \
+          "{input.fai}" "{input.blklist}" "{output.bed}"
+        """
+#+end_src
+
+#+begin_src bash :tangle ./scripts/frag_read_regions.sh
+#!/usr/bin/env bash
+set -euo pipefail
+
+# frag_read_regions.sh
+# Regions the filtered BAM keeps: the autosomes (index names matching
+# ^chr[0-9]+$) minus every blacklisted base, sorted and merged. Windows that
+# contain blacklisted bases are kept; only the blacklisted bases are removed.
+# Usage: frag_read_regions.sh <ref.fa.fai> <blacklist.bed[.gz]> <out.bed>
+
+fai="$1"
+blklist="$2"
+out_bed="$3"
+
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+awk 'BEGIN {OFS="\t"} $1 ~ /^chr[0-9]+$/ {print $1, 0, $2}' "$fai" \
+  | sort -k1,1 -k2,2n > "$tmpdir/autosomes.bed"
+if [[ ! -s "$tmpdir/autosomes.bed" ]]; then
+  echo "ERROR: frag_read_regions: $fai has no autosome (names matching ^chr[0-9]+\$)" >&2
+  exit 1
+fi
+
+zcat -f "$blklist" | cut -f1-3 | sort -k1,1 -k2,2n > "$tmpdir/blacklist.bed"
+if [[ ! -s "$tmpdir/blacklist.bed" ]]; then
+  echo "ERROR: frag_read_regions: blacklist $blklist is empty" >&2
+  exit 1
+fi
+
+# Precondition: the blacklist and the autosomes share chromosome names.
+# bedtools subtract removes nothing on a pure naming mismatch ('chr' prefix).
+shared=$(comm -12 <(cut -f1 "$tmpdir/autosomes.bed" | sort -u) <(cut -f1 "$tmpdir/blacklist.bed" | sort -u))
+if [[ -z "$shared" ]]; then
+  echo "ERROR: frag_read_regions: $blklist and the autosomes of $fai share no chromosome name" >&2
+  echo "  Likely cause: 'chr' prefix mismatch." >&2
+  exit 1
+fi
+
+bedtools subtract -a "$tmpdir/autosomes.bed" -b "$tmpdir/blacklist.bed" \
+  | sort -k1,1 -k2,2n \
+  | bedtools merge -i stdin > "$out_bed"
+
+total_bp=$(awk '{s += $3 - $2} END {print s+0}' "$tmpdir/autosomes.bed")
+kept_bp=$(awk '{s += $3 - $2} END {print s+0}' "$out_bed")
+if [[ "$kept_bp" -eq 0 ]]; then
+  echo "ERROR: frag_read_regions: no autosome bases left after the blacklist" >&2
+  exit 1
+fi
+echo "[frag_read_regions] OK: $kept_bp of $total_bp autosome bp kept in $(wc -l < "$out_bed") intervals" >&2
+#+end_src
+
 **** Filter alignments
+The filtered BAM holds primary, mapped, non-duplicate reads with MAPQ ≥ 30 (=samtools view -q 30 -F 3332=: unmapped 4, secondary 256, duplicate 1024 and supplementary 2048 removed) inside the read regions. Every fragment feature and the end motifs are computed from it.
+
 #+begin_src snakemake
 rule frag_filter_alignments:
     message:
-        "Filter alignments by MAPQ and genomic region"
+        "Filter alignments by MAPQ, flags and read regions"
     conda:
         CONDA_FRAG
     input:
         bam       = f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.coorsort.bam",
-        keep_bed  = f"{D_FRAG}/ref/keep_5mb.bed",
+        keep_bed  = f"{D_FRAG}/ref/{{ref_name}}.read_regions.bed",
         ids_ok    = f"{D_FRAG}/ref/{{ref_name}}.ids_verified.ok",
     log:
         cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_filter_alignments.log",
@@ -724,8 +809,9 @@ rule frag_filter_alignments:
 set -euo pipefail
 
 # filter_alignments.sh
-# Filter BAM to MAPQ>=30 reads within keep-bed regions, fixmate, and re-sort.
-# Usage: filter_alignments.sh <in.bam> <keep.bed> <threads> <out.bam>
+# Keep primary, mapped, non-duplicate reads with MAPQ >= 30 inside the read
+# regions (samtools view -q 30 -F 3332 -L), fixmate, and re-sort.
+# Usage: filter_alignments.sh <in.bam> <read_regions.bed> <threads> <out.bam>
 
 in_bam="$1"
 keep_bed="$2"
@@ -752,7 +838,7 @@ fi
 sort_tmp="${TMPDIR_SAMTOOLS:-${TMPDIR:-/tmp}}/samtools_sort.$$"
 mkdir -p "$(dirname "$sort_tmp")"
 
-samtools view -@ "$threads" -b -h -L "$keep_bed" -q 30 "$in_bam" \
+samtools view -@ "$threads" -b -h -L "$keep_bed" -q 30 -F 3332 "$in_bam" \
   | samtools sort -@ "$threads" -n -T "${sort_tmp}.name" -o - - \
   | samtools fixmate -@ "$threads" - - \
   | samtools sort -@ "$threads" -T "${sort_tmp}.coord" -o "$out_bam" -
@@ -3368,6 +3454,11 @@ rule all:
         ),
         # GC-filtered bins
         f"{D_FRAG}/ref/keep_5mb.bed",
+        # Read regions (autosomes minus blacklisted bases)
+        expand(
+            f"{D_FRAG}/ref/{{ref_name}}.read_regions.bed",
+            ref_name=frag_ref_names,
+        ),
         # Filtered BAMs
         expand(
             f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.filt.bam",
@@ -3811,6 +3902,49 @@ def test_preamble_lists_every_wrapper_variable():
     assert sorted(used - listed) == []
 #+end_src
 
+The read-regions test gives =scripts/frag_read_regions.sh= a two-contig index (=chr1=, =chrX=) and a blacklist with one =chr1= interval and one =chrX= interval, and asserts the output is exactly =chr1= minus that interval: =chrX= is not an autosome, and only the blacklisted bases are removed.
+
+#+begin_src python :tangle ./tests/unit/test_read_regions.py :mkdirp yes
+"""Known-answer test for scripts/frag_read_regions.sh."""
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "frag_read_regions.sh"
+
+pytestmark = pytest.mark.skipif(
+    not shutil.which("bedtools"), reason="bedtools must be on PATH"
+)
+
+
+def test_autosomes_minus_blacklisted_bases(tmp_path):
+    fai = tmp_path / "ref.fa.fai"
+    fai.write_text("chr1\t1000\t6\t60\t61\nchrX\t500\t1030\t60\t61\n")
+    blk = tmp_path / "blacklist.bed"
+    blk.write_text(
+        "chr1\t100\t200\tHigh Signal Region\nchrX\t10\t20\tLow Mappability\n"
+    )
+    out = tmp_path / "regions.bed"
+    subprocess.run(["bash", str(SCRIPT), str(fai), str(blk), str(out)], check=True)
+    assert out.read_text() == "chr1\t0\t100\nchr1\t200\t1000\n"
+
+
+def test_no_shared_chromosome_fails(tmp_path):
+    fai = tmp_path / "ref.fa.fai"
+    fai.write_text("chr1\t1000\t6\t60\t61\n")
+    blk = tmp_path / "blacklist.bed"
+    blk.write_text("1\t100\t200\tHigh Signal Region\n")
+    res = subprocess.run(
+        ["bash", str(SCRIPT), str(fai), str(blk), str(tmp_path / "o.bed")],
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode != 0
+    assert "share no chromosome" in res.stderr
+#+end_src
+
 *** Pinned outputs
 The fixture run's deterministic outputs are pinned by md5 in =tests/expected_outputs.md5= and compared by =tools/check_expected_outputs.sh tests/full=, which prints =ok= or =DIFF= per file and exits 1 on any difference; =--write= regenerates the pins. A =.gz= file is summed on its decompressed bytes. Only files that were byte-identical across two clean fixture runs are pinned (32 files): the per-bin counts, fragment BEDs and GC distributions, ratios, length histograms, end-motif counts and matrices, the derived features, and =ref/keep_5mb.bed=. Left out: the filtered BAMs (their headers differ between runs), the three QC PDFs and the two fastp HTML reports (both differed between runs), the fastp JSON and processed FASTQs (their content depends on fastp's threading and the paths it records), the aligned BAMs and the BWA index (large binaries downstream steps already cover), and =healthy_med.rds= (R serialization format depends on the R version).
 
@@ -4074,6 +4208,11 @@ rule all:
         ),
         # GC-filtered bins
         f"{D_FRAG}/ref/keep_5mb.bed",
+        # Read regions (autosomes minus blacklisted bases)
+        expand(
+            f"{D_FRAG}/ref/{{ref_name}}.read_regions.bed",
+            ref_name=frag_ref_names,
+        ),
         # Filtered BAMs
         expand(
             f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.filt.bam",

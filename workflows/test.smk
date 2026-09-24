@@ -138,6 +138,11 @@ rule all:
         ),
         # GC-filtered bins
         f"{D_FRAG}/ref/keep_5mb.bed",
+        # Read regions (autosomes minus blacklisted bases)
+        expand(
+            f"{D_FRAG}/ref/{{ref_name}}.read_regions.bed",
+            ref_name=frag_ref_names,
+        ),
         # Filtered BAMs
         expand(
             f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.filt.bam",

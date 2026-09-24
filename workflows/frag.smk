@@ -161,14 +161,39 @@ rule frag_check_ids:
           "{input.fasta}" "{input.regions}" "{input.blklist}" "{input.cytoband}" \
           "{output.sentinel}" {input.bams}
         """
+rule frag_read_regions:
+    message:
+        "Autosome regions minus blacklisted bases for the filtered BAM"
+    conda:
+        CONDA_FRAG
+    input:
+        fai     = f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa.fai",
+        blklist = FRAG_BLKLIST,
+        ids_ok  = f"{D_FRAG}/ref/{{ref_name}}.ids_verified.ok",
+    log:
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_read_regions.log",
+    benchmark:
+        f"{D_BENCHMARK}/{{ref_name}}_frag_read_regions.tsv"
+    threads:
+        1
+    output:
+        bed = f"{D_FRAG}/ref/{{ref_name}}.read_regions.bed",
+    shell:
+        """
+        exec &>> "{log.cmd}"
+        echo "[read_regions] $(date) ref={wildcards.ref_name}"
+
+        bash scripts/frag_read_regions.sh \
+          "{input.fai}" "{input.blklist}" "{output.bed}"
+        """
 rule frag_filter_alignments:
     message:
-        "Filter alignments by MAPQ and genomic region"
+        "Filter alignments by MAPQ, flags and read regions"
     conda:
         CONDA_FRAG
     input:
         bam       = f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.coorsort.bam",
-        keep_bed  = f"{D_FRAG}/ref/keep_5mb.bed",
+        keep_bed  = f"{D_FRAG}/ref/{{ref_name}}.read_regions.bed",
         ids_ok    = f"{D_FRAG}/ref/{{ref_name}}.ids_verified.ok",
     log:
         cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_filter_alignments.log",
