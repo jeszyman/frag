@@ -201,7 +201,7 @@ main "$@"
 :END:
 Fragmentomics pipeline for cell-free DNA whole-genome sequencing analysis. Extracts fragment length features, DELFI ratios, end-motif profiles, and NMF signatures from paired-end WGS data.
 
-[[file:docs/frag.dag.png]]
+[[file:resources/figures/frag.dag.png]]
 
 #+begin_export markdown
 

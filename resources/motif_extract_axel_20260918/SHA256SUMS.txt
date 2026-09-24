@@ -1,2 +1,0 @@
-89ddbe55cd363ab2aefa2f1644bc48fb8424b6a10318e122a7bd28e06c572d5b  ./extract_5p_motifs.sh
-4aa9d5f18d5fe1ab35d7792e77b0d597e9a88241f4cdc424d209d5db25e60810  ./aggregate_motif_counts.py

@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "frag: cell-free DNA fragmentomics pipeline"
+authors:
+  - family-names: Szymanski
+    given-names: Jeffrey
+version: 2.0.0
+license: MIT
+repository-code: "https://github.com/jeszyman/frag"
