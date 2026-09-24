@@ -4,6 +4,26 @@
 # workflow using the "include:" directive. (See
 # https://snakemake.readthedocs.io/en/stable/snakefiles/modularization.html)
 #
+# Pure rules only: the module reads no config. The including wrapper must
+# define:
+#   D_INPUTS                 directory holding the raw inputs (FASTQs, reference FASTA)
+#   D_FRAG                   output root (fastqs/, ref/, bams/, frags/, motifs/, ...)
+#   D_LOGS                   per-rule log directory
+#   D_BENCHMARK              per-rule benchmark directory
+#   CONDA_FRAG               path of the frag conda env yaml
+#   FRAG_LIBRARY_IDS         library ids to process
+#   FRAG_HEALTHY_LIBRARIES   library ids used as the healthy reference
+#   FRAG_REF_INPUTS          dict ref_name -> path of the reference FASTA (.fa.gz)
+#   FRAG_FASTP_EXTRA         extra fastp arguments (string, may be empty)
+#   FRAG_GC5MB               BED of GC/mappability-restricted regions
+#   FRAG_BLKLIST             blacklist BED (.bed or .bed.gz)
+#   FRAG_CYTOBAND            UCSC cytoBand table for chromosome arms
+#   FRAG_END_MOTIF_MAX_ENDS  end-motif cap per library (0 = every end)
+#   FRAG_END_MOTIF_SEED      end-motif subsample seed
+#   FRAG_LENGTH_HIST_START   shortest fragment length in the histograms (bp)
+#   FRAG_LENGTH_HIST_END     longest fragment length in the histograms (bp)
+#   FRAG_FPROFILES_K         number of F-profile components
+#
 #########1#########2#########3#########4#########5#########6#########7#########8
 rule frag_fastp:
     message:
@@ -18,7 +38,7 @@ rule frag_fastp:
     benchmark:
         f"{D_BENCHMARK}/{{library_id}}_frag_fastp.tsv"
     params:
-        extra = config.get("fastp", {}).get("extra", ""),
+        extra = FRAG_FASTP_EXTRA,
     threads:
         8
     output:
@@ -48,7 +68,7 @@ rule frag_bwa_index:
     conda:
         CONDA_FRAG
     input:
-        lambda wc: f"{D_INPUTS}/{config['frag_ref_assemblies'][wc.ref_name]['input']}"
+        lambda wc: FRAG_REF_INPUTS[wc.ref_name]
     log:
         cmd = f"{D_LOGS}/{{ref_name}}_bwa_index.log",
     benchmark:
@@ -118,9 +138,9 @@ rule frag_check_ids:
         CONDA_FRAG
     input:
         fasta    = f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa",
-        regions  = config["gc5mb"],
-        blklist  = config["blklist"],
-        cytoband = config["cytoband"],
+        regions  = FRAG_GC5MB,
+        blklist  = FRAG_BLKLIST,
+        cytoband = FRAG_CYTOBAND,
         bams     = expand(
             f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.coorsort.bam",
             library_id=FRAG_LIBRARY_IDS, allow_missing=True,
@@ -195,8 +215,8 @@ rule frag_gc_map_bins:
     conda:
         CONDA_FRAG
     input:
-        regions = config["gc5mb"],
-        blklist = config["blklist"],
+        regions = FRAG_GC5MB,
+        blklist = FRAG_BLKLIST,
         fasta   = expand(f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa", ref_name=frag_ref_names)[0],
         ids_ok  = expand(f"{D_FRAG}/ref/{{ref_name}}.ids_verified.ok", ref_name=frag_ref_names)[0],
     log:
@@ -407,8 +427,8 @@ rule frag_end_motifs:
     benchmark:
         f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_end_motifs.tsv"
     params:
-        max_ends = config.get("end_motif", {}).get("max_ends") or 0,
-        seed     = config.get("end_motif", {}).get("seed", 42),
+        max_ends = FRAG_END_MOTIF_MAX_ENDS,
+        seed     = FRAG_END_MOTIF_SEED,
     threads:
         4
     output:
@@ -465,8 +485,8 @@ rule frag_length_hist:
     benchmark:
         f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_length_hist.tsv"
     params:
-        start_bp = config.get("length_hist", {}).get("start", 30),
-        end_bp   = config.get("length_hist", {}).get("end", 700),
+        start_bp = FRAG_LENGTH_HIST_START,
+        end_bp   = FRAG_LENGTH_HIST_END,
     threads:
         1
     output:
@@ -516,7 +536,7 @@ rule frag_arm_zscores:
         CONDA_FRAG
     input:
         counts   = f"{D_FRAG}/frags/{{ref_name}}.frag_counts.tsv",
-        cytoband = config["cytoband"],
+        cytoband = FRAG_CYTOBAND,
     log:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_arm_zscores.log",
     benchmark:
@@ -699,7 +719,7 @@ rule frag_fprofiles:
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_fprofiles.tsv"
     params:
-        n_components = config.get("fprofiles", {}).get("n_components", 6),
+        n_components = FRAG_FPROFILES_K,
     threads:
         1
     output:

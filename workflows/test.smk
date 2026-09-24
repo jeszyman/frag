@@ -43,6 +43,18 @@ FRAG_HEALTHY_LIBRARIES = config.get("healthy_libraries", [])
 
 NMF_N_COMPONENTS = config.get("nmf", {}).get("n_components", 2)
 
+# Module inputs (workflows/frag.smk reads no config; see its preamble).
+FRAG_FASTP_EXTRA        = config.get("fastp", {}).get("extra", "")
+FRAG_REF_INPUTS         = {name: f"{D_INPUTS}/{a['input']}" for name, a in config["frag_ref_assemblies"].items()}
+FRAG_GC5MB              = config["gc5mb"]
+FRAG_BLKLIST            = config["blklist"]
+FRAG_CYTOBAND           = config["cytoband"]
+FRAG_END_MOTIF_MAX_ENDS = config.get("end_motif", {}).get("max_ends") or 0   # null in YAML -> 0 = every end
+FRAG_END_MOTIF_SEED     = config.get("end_motif", {}).get("seed", 42)
+FRAG_LENGTH_HIST_START  = config.get("length_hist", {}).get("start", 30)
+FRAG_LENGTH_HIST_END    = config.get("length_hist", {}).get("end", 700)
+FRAG_FPROFILES_K        = config.get("fprofiles", {}).get("n_components", 6)
+
 # ------------------------------------------------------------------------------
 # Load Tabular Configuration
 # ------------------------------------------------------------------------------

@@ -258,6 +258,26 @@ dependencies:
 # workflow using the "include:" directive. (See
 # https://snakemake.readthedocs.io/en/stable/snakefiles/modularization.html)
 #
+# Pure rules only: the module reads no config. The including wrapper must
+# define:
+#   D_INPUTS                 directory holding the raw inputs (FASTQs, reference FASTA)
+#   D_FRAG                   output root (fastqs/, ref/, bams/, frags/, motifs/, ...)
+#   D_LOGS                   per-rule log directory
+#   D_BENCHMARK              per-rule benchmark directory
+#   CONDA_FRAG               path of the frag conda env yaml
+#   FRAG_LIBRARY_IDS         library ids to process
+#   FRAG_HEALTHY_LIBRARIES   library ids used as the healthy reference
+#   FRAG_REF_INPUTS          dict ref_name -> path of the reference FASTA (.fa.gz)
+#   FRAG_FASTP_EXTRA         extra fastp arguments (string, may be empty)
+#   FRAG_GC5MB               BED of GC/mappability-restricted regions
+#   FRAG_BLKLIST             blacklist BED (.bed or .bed.gz)
+#   FRAG_CYTOBAND            UCSC cytoBand table for chromosome arms
+#   FRAG_END_MOTIF_MAX_ENDS  end-motif cap per library (0 = every end)
+#   FRAG_END_MOTIF_SEED      end-motif subsample seed
+#   FRAG_LENGTH_HIST_START   shortest fragment length in the histograms (bp)
+#   FRAG_LENGTH_HIST_END     longest fragment length in the histograms (bp)
+#   FRAG_FPROFILES_K         number of F-profile components
+#
 #########1#########2#########3#########4#########5#########6#########7#########8
 #+end_src
 
@@ -277,7 +297,7 @@ rule frag_fastp:
     benchmark:
         f"{D_BENCHMARK}/{{library_id}}_frag_fastp.tsv"
     params:
-        extra = config.get("fastp", {}).get("extra", ""),
+        extra = FRAG_FASTP_EXTRA,
     threads:
         8
     output:
@@ -311,7 +331,7 @@ rule frag_bwa_index:
     conda:
         CONDA_FRAG
     input:
-        lambda wc: f"{D_INPUTS}/{config['frag_ref_assemblies'][wc.ref_name]['input']}"
+        lambda wc: FRAG_REF_INPUTS[wc.ref_name]
     log:
         cmd = f"{D_LOGS}/{{ref_name}}_bwa_index.log",
     benchmark:
@@ -422,9 +442,9 @@ rule frag_check_ids:
         CONDA_FRAG
     input:
         fasta    = f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa",
-        regions  = config["gc5mb"],
-        blklist  = config["blklist"],
-        cytoband = config["cytoband"],
+        regions  = FRAG_GC5MB,
+        blklist  = FRAG_BLKLIST,
+        cytoband = FRAG_CYTOBAND,
         bams     = expand(
             f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.coorsort.bam",
             library_id=FRAG_LIBRARY_IDS, allow_missing=True,
@@ -674,8 +694,8 @@ rule frag_gc_map_bins:
     conda:
         CONDA_FRAG
     input:
-        regions = config["gc5mb"],
-        blklist = config["blklist"],
+        regions = FRAG_GC5MB,
+        blklist = FRAG_BLKLIST,
         fasta   = expand(f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa", ref_name=frag_ref_names)[0],
         ids_ok  = expand(f"{D_FRAG}/ref/{{ref_name}}.ids_verified.ok", ref_name=frag_ref_names)[0],
     log:
@@ -1329,8 +1349,8 @@ rule frag_end_motifs:
     benchmark:
         f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_end_motifs.tsv"
     params:
-        max_ends = config.get("end_motif", {}).get("max_ends") or 0,
-        seed     = config.get("end_motif", {}).get("seed", 42),
+        max_ends = FRAG_END_MOTIF_MAX_ENDS,
+        seed     = FRAG_END_MOTIF_SEED,
     threads:
         4
     output:
@@ -1539,8 +1559,8 @@ rule frag_length_hist:
     benchmark:
         f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_length_hist.tsv"
     params:
-        start_bp = config.get("length_hist", {}).get("start", 30),
-        end_bp   = config.get("length_hist", {}).get("end", 700),
+        start_bp = FRAG_LENGTH_HIST_START,
+        end_bp   = FRAG_LENGTH_HIST_END,
     threads:
         1
     output:
@@ -1739,7 +1759,7 @@ rule frag_arm_zscores:
         CONDA_FRAG
     input:
         counts   = f"{D_FRAG}/frags/{{ref_name}}.frag_counts.tsv",
-        cytoband = config["cytoband"],
+        cytoband = FRAG_CYTOBAND,
     log:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_arm_zscores.log",
     benchmark:
@@ -2674,7 +2694,7 @@ rule frag_fprofiles:
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_fprofiles.tsv"
     params:
-        n_components = config.get("fprofiles", {}).get("n_components", 6),
+        n_components = FRAG_FPROFILES_K,
     threads:
         1
     output:
@@ -3073,6 +3093,18 @@ frag_ref_names = ["chr22"]
 FRAG_HEALTHY_LIBRARIES = config.get("healthy_libraries", [])
 
 NMF_N_COMPONENTS = config.get("nmf", {}).get("n_components", 2)
+
+# Module inputs (workflows/frag.smk reads no config; see its preamble).
+FRAG_FASTP_EXTRA        = config.get("fastp", {}).get("extra", "")
+FRAG_REF_INPUTS         = {name: f"{D_INPUTS}/{a['input']}" for name, a in config["frag_ref_assemblies"].items()}
+FRAG_GC5MB              = config["gc5mb"]
+FRAG_BLKLIST            = config["blklist"]
+FRAG_CYTOBAND           = config["cytoband"]
+FRAG_END_MOTIF_MAX_ENDS = config.get("end_motif", {}).get("max_ends") or 0   # null in YAML -> 0 = every end
+FRAG_END_MOTIF_SEED     = config.get("end_motif", {}).get("seed", 42)
+FRAG_LENGTH_HIST_START  = config.get("length_hist", {}).get("start", 30)
+FRAG_LENGTH_HIST_END    = config.get("length_hist", {}).get("end", 700)
+FRAG_FPROFILES_K        = config.get("fprofiles", {}).get("n_components", 6)
 
 # ------------------------------------------------------------------------------
 # Load Tabular Configuration
@@ -3542,6 +3574,313 @@ def test_library_with_no_ends_fails(tmp_path):
 
 ** Validation
 Checks of the pipeline on real, full-genome data. These run on jeff-beast against data that is not in the repository and are not part of CI.
+
+*** Full-genome run (kh_01)
+A single healthy library, kh_01 (NovaSeq X), run through the whole module on the full ncbi_hg38 reference on jeff-beast, with outputs under =/mnt/data/projects/cfdna/frag/=. It checks that every rule runs at full-genome scale, which the chr22 fixture cannot. It is not run in CI. On [2026-03-24 Tue] all 27 of 27 steps completed. Arm z-scores are all NA and the NMF and F-profile outputs are degenerate with one library, as expected.
+
+#+begin_example
+snakemake -s workflows/cfdna-test.smk --configfile config/cfdna-test.yaml --use-conda --cores 32
+#+end_example
+
+#+begin_src yaml :tangle ./config/cfdna-test.yaml
+conda:
+  frag: "${HOME}/repos/frag/envs/frag-conda-env.yaml"
+
+directories:
+  inputs: /mnt/data/projects/cfdna/inputs
+  frag: /mnt/data/projects/cfdna/frag
+  logs: /mnt/data/projects/cfdna/frag/logs
+  benchmark: /mnt/data/projects/cfdna/frag/benchmark
+
+sample-tsv-path: ${HOME}/repos/frag/data/cfdna-test-samples.tsv
+
+frag_ref_assemblies:
+  ncbi_hg38:
+    url: ""
+    name: ncbi_hg38
+    input: GCA_000001405.15_GRCh38_no_alt_analysis_set.fa.gz
+
+gc5mb: /mnt/data/projects/cfdna/frag/hg38_regions.bed
+blklist: /mnt/data/projects/cfdna/frag/hg38-blacklist.v2.bed.gz
+cytoband: /mnt/data/projects/cfdna/frag/cytoBand.txt
+
+healthy_libraries:
+  - kh_01
+
+end_motif:
+  max_ends: null
+  seed: 42
+
+nmf:
+  n_components: 2
+
+fprofiles:
+  n_components: 6
+#+end_src
+
+#+begin_src snakemake :tangle ./workflows/cfdna-test.smk
+# Single-sample cfDNA WGS pipeline test (kh_01, full hg38)
+# ==============================================================================
+
+import os
+import pandas as pd
+
+# ------------------------------------------------------------------------------
+# Load YAML Configuration
+# ------------------------------------------------------------------------------
+
+configfile: "config/cfdna-test.yaml"
+
+def resolve_config_paths(config_dict):
+    for k, v in config_dict.items():
+        if isinstance(v, str):
+            config_dict[k] = os.path.expandvars(os.path.expanduser(v))
+        elif isinstance(v, dict):
+            resolve_config_paths(v)
+        elif isinstance(v, list):
+            config_dict[k] = [os.path.expandvars(os.path.expanduser(i)) if isinstance(i, str) else i for i in v]
+
+resolve_config_paths(config)
+
+# ------------------------------------------------------------------------------
+# Constants
+# ------------------------------------------------------------------------------
+
+D_INPUTS    = config["directories"]["inputs"]
+D_FRAG      = config["directories"]["frag"]
+D_LOGS      = config["directories"]["logs"]
+D_BENCHMARK = config["directories"]["benchmark"]
+
+CONDA_FRAG = config["conda"]["frag"]
+
+frag_ref_names = ["ncbi_hg38"]
+
+FRAG_HEALTHY_LIBRARIES = config.get("healthy_libraries", [])
+
+NMF_N_COMPONENTS = config.get("nmf", {}).get("n_components", 2)
+
+# Module inputs (workflows/frag.smk reads no config; see its preamble).
+FRAG_FASTP_EXTRA        = config.get("fastp", {}).get("extra", "")
+FRAG_REF_INPUTS         = {name: f"{D_INPUTS}/{a['input']}" for name, a in config["frag_ref_assemblies"].items()}
+FRAG_GC5MB              = config["gc5mb"]
+FRAG_BLKLIST            = config["blklist"]
+FRAG_CYTOBAND           = config["cytoband"]
+FRAG_END_MOTIF_MAX_ENDS = config.get("end_motif", {}).get("max_ends") or 0   # null in YAML -> 0 = every end
+FRAG_END_MOTIF_SEED     = config.get("end_motif", {}).get("seed", 42)
+FRAG_LENGTH_HIST_START  = config.get("length_hist", {}).get("start", 30)
+FRAG_LENGTH_HIST_END    = config.get("length_hist", {}).get("end", 700)
+FRAG_FPROFILES_K        = config.get("fprofiles", {}).get("n_components", 6)
+
+# ------------------------------------------------------------------------------
+# Load Tabular Configuration
+# ------------------------------------------------------------------------------
+
+class SampleTable:
+    def __init__(self, tsv_path, selected_ids):
+        df = pd.read_csv(tsv_path, sep="\t")
+
+        missing = sorted(set(selected_ids) - set(df["library_id"]))
+        if missing:
+            raise ValueError(f"library_id values not found in TSV: {missing}")
+
+        df = df[df["library_id"].isin(selected_ids)].copy()
+        self.df = df
+
+    @property
+    def frag_library_ids(self):
+        return sorted(self.df["library_id"].unique())
+
+    @property
+    def r1_map(self):
+        return dict(zip(self.df["library_id"], self.df["r1_basename"]))
+
+    @property
+    def r2_map(self):
+        return dict(zip(self.df["library_id"], self.df["r2_basename"]))
+
+samples = SampleTable(
+    tsv_path=config["sample-tsv-path"],
+    selected_ids=["kh_01"],
+)
+
+FRAG_LIBRARY_IDS = samples.frag_library_ids
+
+# ------------------------------------------------------------------------------
+# Rule all
+# ------------------------------------------------------------------------------
+
+rule all:
+    input:
+        # FASTQs (raw + processed)
+        expand(
+            f"{D_FRAG}/fastqs/{{library_id}}.{{processing}}_{{read}}.fastq.gz",
+            library_id=FRAG_LIBRARY_IDS,
+            processing=["raw", "processed"],
+            read=["R1", "R2"],
+        ),
+        # BWA index
+        expand(
+            f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa.sa",
+            ref_name=frag_ref_names,
+        ),
+        # Alignments
+        expand(
+            f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.coorsort.bam",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=frag_ref_names,
+        ),
+        # GC-filtered bins
+        f"{D_FRAG}/ref/keep_5mb.bed",
+        # Filtered BAMs
+        expand(
+            f"{D_FRAG}/bams/{{library_id}}.bwa.{{ref_name}}.filt.bam",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=frag_ref_names,
+        ),
+        # Fragment BEDs
+        expand(
+            f"{D_FRAG}/frags/{{library_id}}.{{ref_name}}.frag.bed",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=frag_ref_names,
+        ),
+        # GC distributions
+        expand(
+            f"{D_FRAG}/frags/{{library_id}}.{{ref_name}}.gc_distro.csv",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=frag_ref_names,
+        ),
+        # Healthy GC summary
+        expand(
+            f"{D_FRAG}/frags/{{ref_name}}.healthy_med.rds",
+            ref_name=frag_ref_names,
+        ),
+        # Sampled fragment BEDs
+        expand(
+            f"{D_FRAG}/frags/{{library_id}}.{{ref_name}}.sampled_frag.bed",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=frag_ref_names,
+        ),
+        # Short/long BEDs
+        expand(
+            f"{D_FRAG}/frags/{{library_id}}.{{ref_name}}.norm_{{length}}.bed",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=frag_ref_names,
+            length=["short", "long"],
+        ),
+        # Fragment counts per bin
+        expand(
+            f"{D_FRAG}/counts/{{library_id}}.{{ref_name}}.cnt_{{length}}.tmp",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=frag_ref_names,
+            length=["short", "long"],
+        ),
+        # Merged counts
+        expand(
+            f"{D_FRAG}/frags/{{ref_name}}.frag_counts.tsv",
+            ref_name=frag_ref_names,
+        ),
+        # Ratios
+        expand(
+            f"{D_FRAG}/frags/{{ref_name}}.ratios.tsv",
+            ref_name=frag_ref_names,
+        ),
+        # End motifs per library
+        expand(
+            f"{D_FRAG}/motifs/{{library_id}}.{{ref_name}}.motif_counts.tsv",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=frag_ref_names,
+        ),
+        # Motif count and fraction matrices
+        expand(
+            f"{D_FRAG}/motifs/{{ref_name}}.motif_counts.tsv",
+            ref_name=frag_ref_names,
+        ),
+        expand(
+            f"{D_FRAG}/motifs/{{ref_name}}.all_motifs.tsv",
+            ref_name=frag_ref_names,
+        ),
+        # Fragment length histograms
+        expand(
+            f"{D_FRAG}/histograms/{{library_id}}.{{ref_name}}.length_hist.tsv",
+            library_id=FRAG_LIBRARY_IDS,
+            ref_name=frag_ref_names,
+        ),
+        # Frequency matrix
+        expand(
+            f"{D_FRAG}/histograms/{{ref_name}}.count_histogram.csv",
+            ref_name=frag_ref_names,
+        ),
+        expand(
+            f"{D_FRAG}/histograms/{{ref_name}}.freq_histogram.csv",
+            ref_name=frag_ref_names,
+        ),
+        # Arm z-scores
+        expand(
+            f"{D_FRAG}/features/{{ref_name}}.arm_zscores.csv",
+            ref_name=frag_ref_names,
+        ),
+        # Normalized ratios
+        expand(
+            f"{D_FRAG}/features/{{ref_name}}.ratios_normalized.csv",
+            ref_name=frag_ref_names,
+        ),
+        # QC plots
+        expand(
+            f"{D_FRAG}/qc/{{ref_name}}.frag_length_overlay.pdf",
+            ref_name=frag_ref_names,
+        ),
+        expand(
+            f"{D_FRAG}/qc/{{ref_name}}.ratio_profile.pdf",
+            ref_name=frag_ref_names,
+        ),
+        expand(
+            f"{D_FRAG}/qc/{{ref_name}}.arm_zscore_heatmap.pdf",
+            ref_name=frag_ref_names,
+        ),
+        # NMF fragment length features
+        expand(
+            f"{D_FRAG}/features/{{ref_name}}.nmf_{NMF_N_COMPONENTS}.W.csv",
+            ref_name=frag_ref_names,
+        ),
+        # Motif diversity score
+        expand(
+            f"{D_FRAG}/features/{{ref_name}}.motif_diversity.csv",
+            ref_name=frag_ref_names,
+        ),
+        # F-profiles
+        expand(
+            f"{D_FRAG}/features/{{ref_name}}.fprofiles.tsv",
+            ref_name=frag_ref_names,
+        ),
+
+# ------------------------------------------------------------------------------
+# Symlink input FASTQs
+# ------------------------------------------------------------------------------
+
+rule symlink_input_fastqs:
+    message:
+        "Create symlinks for raw input FASTQs"
+    input:
+        r1 = lambda wc: f"{D_INPUTS}/{samples.r1_map[wc.library_id]}",
+        r2 = lambda wc: f"{D_INPUTS}/{samples.r2_map[wc.library_id]}",
+    output:
+        r1 = f"{D_FRAG}/fastqs/{{library_id}}.raw_R1.fastq.gz",
+        r2 = f"{D_FRAG}/fastqs/{{library_id}}.raw_R2.fastq.gz",
+    params:
+        out_dir = f"{D_FRAG}/fastqs",
+    shell:
+        """
+        mkdir -p "{params.out_dir}"
+        ln -sfr "{input.r1}" "{output.r1}"
+        ln -sfr "{input.r2}" "{output.r2}"
+        """
+
+# ------------------------------------------------------------------------------
+# Include module
+# ------------------------------------------------------------------------------
+
+include: "frag.smk"
+#+end_src
 
 *** End-motif extraction on kh_01
 The strand-aware extractor (=scripts/frag_end_motifs.sh=) was compared with the read-number-keyed extraction it replaces (=scripts/sample_motifs.sh= at commit 499bb26) on the healthy full-genome library kh_01 (NovaSeq X, filtered BAM =/mnt/data/projects/cfdna/frag/bams/kh_01.bwa.ncbi_hg38.filt.bam=, reference =/mnt/data/projects/cfdna/frag/ref/bwa/ncbi_hg38/ncbi_hg38.fa=). Three runs were made in =/mnt/data/projects/cfdna/frag/validation/end_motifs_2026-09-24/= on [2026-09-24 Thu]: the new extractor counting every end (=max_ends= 0), the new extractor with =max_ends= 10,000,000 (seed 42), and the old script with its default 1,000,000 reads per mate.
