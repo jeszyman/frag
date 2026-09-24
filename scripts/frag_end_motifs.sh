@@ -3,8 +3,8 @@ set -euo pipefail
 
 # frag_end_motifs.sh
 # Count the 5' fragment-end 4-mer of every qualifying read, strand-aware and
-# read from the reference. Adapted from Axel's extract_5p_motifs.sh
-# (commit 7a5767ab1, 2026-09-18).
+# read from the reference. Adapted from extract_5p_motifs.sh by
+# Axel Hidalgo, commit 7a5767ab1 (2026-09-18).
 #
 # Qualifying read: paired, primary, mapped, mate mapped, non-duplicate,
 # MAPQ >= 30 (samtools -q 30 -f 1 -F 3340). Both mates count, so each

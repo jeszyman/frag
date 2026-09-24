@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """frag_motif_matrix.py: per-library end-motif count files to motif x library matrices.
 
-Adapted from Axel's aggregate_motif_counts.py (commit 7a5767ab1). Unlike that
+Adapted from aggregate_motif_counts.py by Axel Hidalgo, commit 7a5767ab1
+(2026-09-18). Unlike that
 script, both outputs keep motifs as rows and libraries as columns, the layout
 frag_motif_diversity.R and frag_fprofiles.py read.
 
