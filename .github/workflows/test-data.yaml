@@ -1,11 +1,18 @@
 name: test-data
 
 on:
+  push:
+    branches: [master]
+    paths:
+      - "tools/get_test_data.sh"
+      - "tests/**"
+      - "envs/**"
+      - ".github/workflows/test-data.yaml"
   pull_request:
     paths:
       - "tools/get_test_data.sh"
       - "tests/**"
-      - "envs/frag-conda-env.yaml"
+      - "envs/**"
       - ".github/workflows/test-data.yaml"
   schedule:
     - cron: "0 4 * * 1"

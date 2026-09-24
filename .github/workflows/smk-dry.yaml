@@ -1,11 +1,26 @@
 name: smk-dry
 
 on:
+  push:
+    branches: [master]
+    paths:
+      - "workflows/**"
+      - "config/**"
+      - "scripts/**"
+      - "envs/**"
+      - "tests/**"
+      - "tools/**"
+      - "Snakefile"
+      - ".github/workflows/smk-dry.yaml"
   pull_request:
     paths:
       - "workflows/**"
       - "config/**"
       - "scripts/**"
+      - "envs/**"
+      - "tests/**"
+      - "tools/**"
+      - "Snakefile"
       - ".github/workflows/smk-dry.yaml"
   schedule:
     - cron: "0 4 * * 1"
@@ -53,3 +68,7 @@ jobs:
             --dry-run \
             --printshellcmds \
             --rerun-incomplete
+
+      - name: Unit tests
+        run: |
+          micromamba run -n frag python -m pytest -q tests/unit

@@ -1,11 +1,26 @@
 name: smk-run
 
 on:
+  push:
+    branches: [master]
+    paths:
+      - "workflows/**"
+      - "config/**"
+      - "scripts/**"
+      - "envs/**"
+      - "tests/**"
+      - "tools/**"
+      - "Snakefile"
+      - ".github/workflows/smk-run.yaml"
   pull_request:
     paths:
       - "workflows/**"
       - "config/**"
       - "scripts/**"
+      - "envs/**"
+      - "tests/**"
+      - "tools/**"
+      - "Snakefile"
       - ".github/workflows/smk-run.yaml"
   schedule:
     - cron: "0 5 * * 1"
@@ -48,3 +63,7 @@ jobs:
             --printshellcmds \
             --rerun-incomplete \
             --use-conda
+
+      - name: Check pinned outputs
+        run: |
+          bash tools/check_expected_outputs.sh tests/full
