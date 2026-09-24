@@ -11,6 +11,9 @@
 tests/benchmark/
 tests/logs/
 
+# Pinned fixture checksums (the global gitignore ignores *.md5)
+!tests/expected_outputs.md5
+
 # Snakemake
 .snakemake/
 
