@@ -176,6 +176,32 @@ def test_max_ends_zero_counts_all(tmp_path):
     assert sum(got.values()) == 1000
 
 
+def test_max_ends_none_counts_all(tmp_path):
+    bam, fa = write_fixture(tmp_path, many_pairs(500))
+    _, got = run_script(tmp_path, bam, fa, max_ends="none")
+    assert sum(got.values()) == 1000
+
+
+def test_max_ends_non_integer_fails(tmp_path):
+    bam, fa = write_fixture(tmp_path, many_pairs(10))
+    res = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            str(bam),
+            str(fa),
+            str(tmp_path / "x.tsv"),
+            "1",
+            "ten",
+            "42",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode != 0
+    assert "max_ends must be" in res.stderr
+
+
 def test_max_ends_above_total_equals_all(tmp_path):
     bam, fa = write_fixture(tmp_path, many_pairs(500))
     _, all_ends = run_script(tmp_path, bam, fa, max_ends=0, name="a.tsv")

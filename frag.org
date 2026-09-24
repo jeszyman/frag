@@ -438,6 +438,7 @@ include: "workflows/test.smk"
 #   FRAG_LIBRARY_IDS         library ids to process
 #   FRAG_HEALTHY_LIBRARIES   library ids used as the healthy reference
 #   FRAG_REF_INPUTS          dict ref_name -> path of the reference FASTA (.fa.gz)
+#   frag_ref_names           list of reference names (the keys of FRAG_REF_INPUTS)
 #   FRAG_FASTP_EXTRA         extra fastp arguments (string, may be empty)
 #   FRAG_GC5MB               BED of GC/mappability-restricted regions
 #   FRAG_BLKLIST             blacklist BED (.bed or .bed.gz)
@@ -1553,11 +1554,12 @@ set -euo pipefail
 #
 # max_ends > 0 and fewer than the qualifying reads: samtools --subsample keeps
 # a fraction max_ends/qualifying reads, chosen by a hash of the read name, so
-# mates stay together and every chromosome is sampled. max_ends 0 counts all.
+# mates stay together and every chromosome is sampled. max_ends 0 or none
+# counts all.
 #
 # Output: 256 rows "motif<TAB>count" (A<C<G<T order, zeros included), then
 # "OTHER<TAB>count".
-# Usage: frag_end_motifs.sh <bam> <fasta> <out.tsv> <threads> <max_ends> <seed>
+# Usage: frag_end_motifs.sh <bam> <fasta> <out.tsv> <threads> <max_ends|none> <seed>
 
 in_bam="$1"
 in_fasta="$2"
@@ -1565,6 +1567,13 @@ out_tsv="$3"
 threads="$4"
 max_ends="$5"
 seed="$6"
+
+# max_ends "none" (or null/None/empty) means every end, the same as 0.
+case "$max_ends" in none|None|null|"") max_ends=0 ;; esac
+if ! [[ "$max_ends" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: frag_end_motifs: max_ends must be a non-negative integer or none, got '$max_ends'" >&2
+  exit 1
+fi
 
 read_filter=(-q 30 -f 1 -F 3340)
 
@@ -3281,7 +3290,7 @@ D_BENCHMARK = config["directories"]["benchmark"]
 
 CONDA_FRAG = config["conda"]["frag"]
 
-frag_ref_names = ["chr22"]
+frag_ref_names = list(config["frag_ref_assemblies"])
 
 FRAG_HEALTHY_LIBRARIES = config.get("healthy_libraries", [])
 
@@ -3675,6 +3684,22 @@ def test_max_ends_zero_counts_all(tmp_path):
     assert sum(got.values()) == 1000
 
 
+def test_max_ends_none_counts_all(tmp_path):
+    bam, fa = write_fixture(tmp_path, many_pairs(500))
+    _, got = run_script(tmp_path, bam, fa, max_ends="none")
+    assert sum(got.values()) == 1000
+
+
+def test_max_ends_non_integer_fails(tmp_path):
+    bam, fa = write_fixture(tmp_path, many_pairs(10))
+    res = subprocess.run(
+        ["bash", str(SCRIPT), str(bam), str(fa), str(tmp_path / "x.tsv"), "1", "ten", "42"],
+        capture_output=True, text=True,
+    )
+    assert res.returncode != 0
+    assert "max_ends must be" in res.stderr
+
+
 def test_max_ends_above_total_equals_all(tmp_path):
     bam, fa = write_fixture(tmp_path, many_pairs(500))
     _, all_ends = run_script(tmp_path, bam, fa, max_ends=0, name="a.tsv")
@@ -3763,6 +3788,27 @@ def test_library_with_no_ends_fails(tmp_path):
     )
     assert res.returncode != 0
     assert "empty" in res.stderr
+#+end_src
+
+The module contract test checks that every wrapper-bound name =workflows/frag.smk= uses is listed in its preamble comment, so a wrapper written from that list alone defines everything the module needs.
+
+#+begin_src python :tangle ./tests/unit/test_module_contract.py :mkdirp yes
+"""workflows/frag.smk lists in its preamble every wrapper variable it uses."""
+import re
+from pathlib import Path
+
+SMK = Path(__file__).resolve().parents[2] / "workflows" / "frag.smk"
+NAME = re.compile(r"\b(D_[A-Z_]+|FRAG_[A-Z_]+|CONDA_[A-Z_]+|NMF_[A-Z_]+|frag_ref_names)\b")
+
+
+def test_preamble_lists_every_wrapper_variable():
+    lines = SMK.read_text().splitlines()
+    header = "\n".join(l for l in lines if l.startswith("#"))
+    body = "\n".join(l for l in lines if not l.lstrip().startswith("#"))
+    used = set(NAME.findall(body))
+    listed = set(re.findall(r"^#\s+(\w+)\s", header, flags=re.M))
+    assert used, "no wrapper variables found"
+    assert sorted(used - listed) == []
 #+end_src
 
 *** Pinned outputs
@@ -3950,7 +3996,7 @@ D_BENCHMARK = config["directories"]["benchmark"]
 
 CONDA_FRAG = config["conda"]["frag"]
 
-frag_ref_names = ["ncbi_hg38"]
+frag_ref_names = list(config["frag_ref_assemblies"])
 
 FRAG_HEALTHY_LIBRARIES = config.get("healthy_libraries", [])
 
@@ -4222,13 +4268,13 @@ The BAM holds 192,998,342 qualifying reads, and the all-ends run counted every o
 
 | Run                    | Ends counted | OTHER | CC-end share | Five most frequent motifs    | Pearson r vs all ends |
 |------------------------+--------------+-------+--------------+------------------------------+-----------------------|
-| New, every end         |  192,998,342 |    27 |       0.1570 | CCCA, CCTG, CCAG, CCTT, CCCT |                  1.000 |
-| New, =max_ends= 10 M   |    9,998,866 |     0 |       0.1569 | CCCA, CCTG, CCAG, CCTT, CCCT |               0.99998 |
-| Old (=sample_motifs.sh=) |    2,000,000 |     0 |       0.1117 | CCCA, AAAA, CCTG, CCAG, CCTT |                  0.935 |
+| New, every end         | 192,998,342  |    27 |       0.1570 | CCCA, CCTG, CCAG, CCTT, CCCT |                 1.000 |
+| New, =max_ends= 10 M     | 9,998,866    |     0 |       0.1569 | CCCA, CCTG, CCAG, CCTT, CCCT |               0.99998 |
+| Old (=sample_motifs.sh=) | 2,000,000    |     0 |       0.1117 | CCCA, AAAA, CCTG, CCAG, CCTT |                 0.935 |
 
 Share of reads per chromosome: all qualifying reads (=samtools idxstats=), the 10 M subsample (the new script's =--subsample= draw), and the old script's read-1 draw (MAPQ ≥ 60, subsampled at 3x then truncated with =head -n 1000000=).
 
-| Chromosome | All    | 10 M subsample | Old    |
+| Chromosome |    All | 10 M subsample |    Old |
 |------------+--------+----------------+--------|
 | chr1       | 0.1194 |         0.1194 | 0.1750 |
 | chr2       | 0.0922 |         0.0922 | 0.1370 |
@@ -4241,18 +4287,18 @@ Share of reads per chromosome: all qualifying reads (=samtools idxstats=), the 1
 | chr9       | 0.0387 |         0.0386 | 0.0575 |
 | chr10      | 0.0712 |         0.0713 | 0.1054 |
 | chr11      | 0.0515 |         0.0517 | 0.0590 |
-| chr12      | 0.0446 |         0.0446 | 0      |
-| chr13      | 0.0497 |         0.0496 | 0      |
-| chr14      | 0.0199 |         0.0199 | 0      |
-| chr15      | 0.0264 |         0.0264 | 0      |
-| chr16      | 0.0424 |         0.0424 | 0      |
-| chr17      | 0.0322 |         0.0323 | 0      |
-| chr18      | 0.0284 |         0.0285 | 0      |
-| chr19      | 0.0066 |         0.0066 | 0      |
-| chr20      | 0.0300 |         0.0299 | 0      |
-| chr21      | 0.0157 |         0.0157 | 0      |
-| chr22      | 0.0139 |         0.0139 | 0      |
-| chrX       | 0      |              0 | 0      |
+| chr12      | 0.0446 |         0.0446 |      0 |
+| chr13      | 0.0497 |         0.0496 |      0 |
+| chr14      | 0.0199 |         0.0199 |      0 |
+| chr15      | 0.0264 |         0.0264 |      0 |
+| chr16      | 0.0424 |         0.0424 |      0 |
+| chr17      | 0.0322 |         0.0323 |      0 |
+| chr18      | 0.0284 |         0.0285 |      0 |
+| chr19      | 0.0066 |         0.0066 |      0 |
+| chr20      | 0.0300 |         0.0299 |      0 |
+| chr21      | 0.0157 |         0.0157 |      0 |
+| chr22      | 0.0139 |         0.0139 |      0 |
+| chrX       |      0 |              0 |      0 |
 
 The strand-aware extractor puts the CC-initiated motifs (CCCA, CCTG, CCAG) at the top of the table, and AAAA falls from second to eleventh, as expected once interior 3′ ends are no longer counted. The CC-end share, however, is 0.157, above the 0.11 to 0.12 expected for plasma cfDNA under this definition. The old extraction's 0.112 falls inside that range, so the expected value may itself have been taken from a read-number-keyed table; this is not resolved here. The 10 M subsample reproduces the all-ends motif fractions (r = 0.99998, largest difference in any motif fraction 6.8 × 10⁻⁵) and samples every chromosome in proportion to its reads to within 0.0002. The old script's reads come only from chr1 to chr11, because its coordinate-ordered draw was cut at one million reads, and chr12 to chr22 contribute no motifs. The filtered BAM carries no chrX reads (and 556,573 chrY reads, not tabulated).
 

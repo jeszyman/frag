@@ -55,7 +55,7 @@ D_BENCHMARK = config["directories"]["benchmark"]
 
 CONDA_FRAG = config["conda"]["frag"]
 
-frag_ref_names = ["ncbi_hg38"]
+frag_ref_names = list(config["frag_ref_assemblies"])
 
 FRAG_HEALTHY_LIBRARIES = config.get("healthy_libraries", [])
 

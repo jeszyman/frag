@@ -14,11 +14,12 @@ set -euo pipefail
 #
 # max_ends > 0 and fewer than the qualifying reads: samtools --subsample keeps
 # a fraction max_ends/qualifying reads, chosen by a hash of the read name, so
-# mates stay together and every chromosome is sampled. max_ends 0 counts all.
+# mates stay together and every chromosome is sampled. max_ends 0 or none
+# counts all.
 #
 # Output: 256 rows "motif<TAB>count" (A<C<G<T order, zeros included), then
 # "OTHER<TAB>count".
-# Usage: frag_end_motifs.sh <bam> <fasta> <out.tsv> <threads> <max_ends> <seed>
+# Usage: frag_end_motifs.sh <bam> <fasta> <out.tsv> <threads> <max_ends|none> <seed>
 
 in_bam="$1"
 in_fasta="$2"
@@ -26,6 +27,13 @@ out_tsv="$3"
 threads="$4"
 max_ends="$5"
 seed="$6"
+
+# max_ends "none" (or null/None/empty) means every end, the same as 0.
+case "$max_ends" in none|None|null|"") max_ends=0 ;; esac
+if ! [[ "$max_ends" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: frag_end_motifs: max_ends must be a non-negative integer or none, got '$max_ends'" >&2
+  exit 1
+fi
 
 read_filter=(-q 30 -f 1 -F 3340)
 

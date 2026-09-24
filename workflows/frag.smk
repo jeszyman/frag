@@ -14,6 +14,7 @@
 #   FRAG_LIBRARY_IDS         library ids to process
 #   FRAG_HEALTHY_LIBRARIES   library ids used as the healthy reference
 #   FRAG_REF_INPUTS          dict ref_name -> path of the reference FASTA (.fa.gz)
+#   frag_ref_names           list of reference names (the keys of FRAG_REF_INPUTS)
 #   FRAG_FASTP_EXTRA         extra fastp arguments (string, may be empty)
 #   FRAG_GC5MB               BED of GC/mappability-restricted regions
 #   FRAG_BLKLIST             blacklist BED (.bed or .bed.gz)
