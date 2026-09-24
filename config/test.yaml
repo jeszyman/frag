@@ -1,5 +1,5 @@
 conda:
-  frag: "../config/frag-conda-env.yaml"
+  frag: "../envs/frag-conda-env.yaml"
 
 directories:
   inputs: tests/full/inputs

@@ -5,7 +5,7 @@ on:
     paths:
       - "tools/get_test_data.sh"
       - "tests/**"
-      - "config/frag-conda-env.yaml"
+      - "envs/frag-conda-env.yaml"
       - ".github/workflows/test-data.yaml"
   schedule:
     - cron: "0 4 * * 1"
@@ -32,7 +32,7 @@ jobs:
       - name: Verify env file exists
         run: |
           set -euo pipefail
-          test -f config/frag-conda-env.yaml || { echo "Missing: config/frag-conda-env.yaml"; exit 1; }
+          test -f envs/frag-conda-env.yaml || { echo "Missing: envs/frag-conda-env.yaml"; exit 1; }
 
       - name: Setup Conda (Miniforge3)
         uses: conda-incubator/setup-miniconda@v3
@@ -52,8 +52,8 @@ jobs:
       - name: Create env
         run: |
           set -euo pipefail
-          mamba env create -n frag -f config/frag-conda-env.yaml -vv || \
-            conda env create -n frag -f config/frag-conda-env.yaml -vv
+          mamba env create -n frag -f envs/frag-conda-env.yaml -vv || \
+            conda env create -n frag -f envs/frag-conda-env.yaml -vv
           conda run -n frag samtools --version || true
 
       - name: Execute get_test_data.sh + sanity checks

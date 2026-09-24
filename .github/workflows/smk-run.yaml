@@ -28,14 +28,14 @@ jobs:
       - name: Set up micromamba
         uses: mamba-org/setup-micromamba@v1
         with:
-          environment-file: config/frag-conda-env.yaml
+          environment-file: envs/frag-conda-env.yaml
           environment-name: frag
           cache-environment: true
 
       - name: Verify required files
         run: |
           set -euo pipefail
-          test -f config/frag-conda-env.yaml
+          test -f envs/frag-conda-env.yaml
           test -f workflows/test.smk
           test -f config/test.yaml
 

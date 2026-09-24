@@ -1,5 +1,5 @@
 conda:
-  frag: "${HOME}/repos/frag/config/frag-conda-env.yaml"
+  frag: "${HOME}/repos/frag/envs/frag-conda-env.yaml"
 
 directories:
   inputs: /mnt/data/projects/cfdna/inputs
