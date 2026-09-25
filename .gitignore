@@ -7,9 +7,8 @@
 **/.java
 # --- biopipe-specific ignores (module template) ---
 
-# Pipeline logs and benchmarks (the fixture writes them under tests/full/)
-tests/benchmark/
-tests/logs/
+# Fixture logs and benchmarks go to tests/full/logs and tests/full/benchmark,
+# which the tests/full/* rule below ignores.
 
 # Pinned fixture checksums (the global gitignore ignores *.md5)
 !tests/expected_outputs.md5
