@@ -6,5 +6,6 @@ authors:
   - family-names: Szymanski
     given-names: Jeffrey
 version: 2.0.0
+date-released: 2026-09-25
 license: MIT
 repository-code: "https://github.com/jeszyman/frag"

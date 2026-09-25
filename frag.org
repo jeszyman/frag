@@ -711,7 +711,7 @@ SOFTWARE.
 #+end_src
 
 *** CITATION
-Citation File Format; GitHub renders a "Cite this repository" button from it. =version= is set to the next release; =date-released= is added at the tag.
+Citation File Format; GitHub renders a "Cite this repository" button from it. =version= and =date-released= match the latest tag.
 
 #+begin_src yaml :tangle ./CITATION.cff :mkdirp yes
 cff-version: 1.2.0
@@ -722,6 +722,7 @@ authors:
   - family-names: Szymanski
     given-names: Jeffrey
 version: 2.0.0
+date-released: 2026-09-25
 license: MIT
 repository-code: "https://github.com/jeszyman/frag"
 #+end_src
