@@ -1,3 +1,4 @@
+#+PROPERTY: header-args :padline no
 * Cell-free DNA Fragmentomics Analysis                              :biopipe:
 - [ ] ingest https://github.com.mcas.ms/epifluidlab/FinaleToolkit
 - [ ] could probably go a little heavier on data size to test
@@ -201,11 +202,9 @@ parse_args() {
   fi
 }
 
-
 ################
 ###   Main   ###
 ################
-
 
 main() {
   parse_args "$@"
@@ -321,7 +320,6 @@ parse_args() {
 
     declare -g blk_url="https://raw.githubusercontent.com/Boyle-Lab/Blacklist/master/lists/hg38-blacklist.v2.bed.gz"
     declare -g ref_url="https://hgdownload.soe.ucsc.edu/goldenPath/hg38/chromosomes/chr22.fa.gz"
-
 
     declare -g fa_head_lines=4000000
     declare -g nreads=60000
@@ -899,7 +897,6 @@ The root =Snakefile= runs the fixture wrapper, so =snakemake -n= from the reposi
 
 #+begin_src snakemake :tangle ./Snakefile
 include: "workflows/test.smk"
-
 
 rule default:
     default_target: True
