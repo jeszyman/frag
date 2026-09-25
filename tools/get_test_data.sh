@@ -40,11 +40,15 @@ main(){
 }
 
 clean_inputs_dir() {
-  if [[ -d "$out_dir" ]]; then
-    echo "[clean] removing ${out_dir}"
-    rm -rf "$out_dir"
-  fi
+  # Remove only the files this script rebuilds; committed fixtures made
+  # elsewhere (cytoBand.chr22.txt, delfi_bins.chr22.tsv) stay.
   mkdir -p "$out_dir"
+  local acc
+  for acc in "${RUNS[@]}"; do
+    rm -f "${out_dir}/${acc}_1.fastq.gz" "${out_dir}/${acc}_2.fastq.gz"
+  done
+  rm -f "$out_fa" "$out_blk" "$excl_bed" "${excl_bed}.tbi"
+  echo "[clean] removed rebuilt inputs in ${out_dir}"
 }
 
 ensure_gitignore() {
@@ -125,4 +129,7 @@ make_exclude_keep_beds() {
   echo "[beds] exclude=${excl_bed}"
 }
 
-main "$@"
+# Run only when executed, so tests can source the functions.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

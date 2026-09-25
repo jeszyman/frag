@@ -345,11 +345,15 @@ main(){
 }
 
 clean_inputs_dir() {
-  if [[ -d "$out_dir" ]]; then
-    echo "[clean] removing ${out_dir}"
-    rm -rf "$out_dir"
-  fi
+  # Remove only the files this script rebuilds; committed fixtures made
+  # elsewhere (cytoBand.chr22.txt, delfi_bins.chr22.tsv) stay.
   mkdir -p "$out_dir"
+  local acc
+  for acc in "${RUNS[@]}"; do
+    rm -f "${out_dir}/${acc}_1.fastq.gz" "${out_dir}/${acc}_2.fastq.gz"
+  done
+  rm -f "$out_fa" "$out_blk" "$excl_bed" "${excl_bed}.tbi"
+  echo "[clean] removed rebuilt inputs in ${out_dir}"
 }
 
 ensure_gitignore() {
@@ -430,7 +434,10 @@ make_exclude_keep_beds() {
   echo "[beds] exclude=${excl_bed}"
 }
 
-main "$@"
+# Run only when executed, so tests can source the functions.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
 
 #+end_src
 
@@ -4841,6 +4848,46 @@ def test_no_shared_chromosome_fails(tmp_path):
     )
     assert res.returncode != 0
     assert "share no chromosome" in res.stderr
+#+end_src
+
+The test-data cleanup test sources =tools/get_test_data.sh= from a copy placed in a temporary repository layout, runs only its cleanup step, and asserts that the files the script downloads are removed while committed fixtures it does not rebuild (the cytoband table and the DELFI bin table) are kept.
+
+#+begin_src python :tangle ./tests/unit/test_get_test_data.py :mkdirp yes
+"""tools/get_test_data.sh cleanup removes only the files the script rebuilds."""
+
+import shutil
+import subprocess
+from pathlib import Path
+
+SCRIPT = Path(__file__).resolve().parents[2] / "tools" / "get_test_data.sh"
+REBUILT = [
+    "SRR3819937_1.fastq.gz",
+    "chr22-test.fa.gz",
+    "hg38-blacklist.v2.bed.gz",
+    "chr22.exclude.blacklist.bed.gz",
+    "chr22.exclude.blacklist.bed.gz.tbi",
+]
+KEPT = ["cytoBand.chr22.txt", "delfi_bins.chr22.tsv"]
+
+
+def test_cleanup_keeps_fixtures_it_does_not_rebuild(tmp_path):
+    (tmp_path / "tools").mkdir()
+    shutil.copy(SCRIPT, tmp_path / "tools" / "get_test_data.sh")
+    inputs = tmp_path / "tests" / "full" / "inputs"
+    inputs.mkdir(parents=True)
+    for name in REBUILT + KEPT:
+        (inputs / name).write_text("x\n")
+    subprocess.run(
+        [
+            "bash",
+            "-c",
+            "source tools/get_test_data.sh && parse_args && clean_inputs_dir",
+        ],
+        cwd=tmp_path,
+        check=True,
+        timeout=30,
+    )
+    assert sorted(p.name for p in inputs.iterdir()) == sorted(KEPT)
 #+end_src
 
 The DELFI-bins test gives =scripts/frag_delfi_bins.sh= a bin table with three =chr1= bins and one =chr2= bin and an index holding only a 12 Mb =chr1=. The output is the two =chr1= bins that end within the contig, as =chr=, =start=, =end=, =gc=.
