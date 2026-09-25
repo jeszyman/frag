@@ -6,9 +6,11 @@ set -euo pipefail
 # read from the reference. Adapted from extract_5p_motifs.sh by
 # Axel Hidalgo, commit 7a5767ab1 (2026-09-18).
 #
-# Qualifying read: paired, primary, mapped, mate mapped, non-duplicate,
-# MAPQ >= 30 (samtools -q 30 -f 1 -F 3340). Both mates count, so each
-# fragment gives two ends. Plus-strand read: reference [start, start+4).
+# Qualifying read: paired, primary, mapped, mate not flagged unmapped,
+# non-duplicate, MAPQ >= 30 (samtools -q 30 -f 1 -F 3340). Each qualifying
+# read gives one end, so a fragment whose two reads qualify gives two ends;
+# a read whose mate was removed upstream (filter_alignments.sh fixmate does
+# not flag such a mate unmapped) gives one. Plus-strand read: reference [start, start+4).
 # Minus-strand read: reference [end-4, end), reverse-complemented by
 # bedtools getfasta -s. 4-mers with a non-ACGT base are counted as OTHER.
 #

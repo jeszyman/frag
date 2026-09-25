@@ -74,7 +74,7 @@ FRAG_REF_INPUTS         = {name: f"{D_INPUTS}/{a['input']}" for name, a in confi
 FRAG_DELFI_BINS         = config["delfi_bins"]
 FRAG_BLKLIST            = config["blklist"]
 FRAG_CYTOBAND           = config["cytoband"]
-FRAG_END_MOTIF_MAX_ENDS = int(config.get("end_motif", {}).get("max_ends") or 0)   # null in YAML -> 0 = every end; 1e7 or 10000000.0 -> 10000000
+FRAG_END_MOTIF_MAX_ENDS = int(config.get("end_motif", {}).get("max_ends") or 0)   # null in YAML -> 0 = every end; 10000000.0 -> 10000000
 FRAG_END_MOTIF_SEED     = config.get("end_motif", {}).get("seed", 42)
 FRAG_LENGTH_HIST_START  = config.get("length_hist", {}).get("start", 30)
 FRAG_LENGTH_HIST_END    = config.get("length_hist", {}).get("end", 700)

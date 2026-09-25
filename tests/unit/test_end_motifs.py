@@ -100,6 +100,11 @@ CASES = {
         [plus_motif(181), minus_motif(261, aligned_len=25)],
     ),
     "n_end": (pair("nend", 99, 301, 147, 351), ["OTHER", minus_motif(351)]),
+    # Orphan: its mate was removed upstream; fixmate leaves flag 65, mate "*".
+    "orphan": (
+        ["orph\t65\tchrT\t321\t60\t30M\t*\t0\t0\t*\t*"],
+        [plus_motif(321)],
+    ),
 }
 
 

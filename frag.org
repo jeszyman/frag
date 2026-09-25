@@ -860,7 +860,7 @@ frag_ref_assemblies:
     name: ncbi_hg38
     input: GCA_000001405.15_GRCh38_no_alt_analysis_set.fa.gz
 
-delfi_bins: resources/data/delfi_bins_hg38.tsv
+delfi_bins: ${HOME}/repos/frag/resources/data/delfi_bins_hg38.tsv   # the bin table shipped in the frag repository
 blklist: /path/to/hg38-blacklist.v2.bed.gz
 cytoband: /path/to/cytoBand.txt
 
@@ -1627,7 +1627,9 @@ packages <- c("tidyverse")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+# The helpers sit beside this script; interactive sessions (no --file=) run from the repo root.
+file_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
+script_dir <- if (length(file_arg)) dirname(normalizePath(sub("^--file=", "", file_arg))) else "scripts"
 source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
@@ -1723,7 +1725,9 @@ packages <- c("tidyverse")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+# The helpers sit beside this script; interactive sessions (no --file=) run from the repo root.
+file_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
+script_dir <- if (length(file_arg)) dirname(normalizePath(sub("^--file=", "", file_arg))) else "scripts"
 source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
@@ -1825,7 +1829,9 @@ packages <- c("tidyverse")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+# The helpers sit beside this script; interactive sessions (no --file=) run from the repo root.
+file_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
+script_dir <- if (length(file_arg)) dirname(normalizePath(sub("^--file=", "", file_arg))) else "scripts"
 source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
@@ -2098,7 +2104,9 @@ packages <- c("tidyverse")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+# The helpers sit beside this script; interactive sessions (no --file=) run from the repo root.
+file_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
+script_dir <- if (length(file_arg)) dirname(normalizePath(sub("^--file=", "", file_arg))) else "scripts"
 source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
@@ -2149,7 +2157,7 @@ write_tsv(ratios, file = ratios_tsv)
 #+end_src
 
 *** End motifs
-An end motif is the 4 reference bases at the 5′ end of each read. Every paired, primary, mapped, non-duplicate read with MAPQ ≥ 30 (=samtools view -q 30 -f 1 -F 3340=) counts, both mates, so each fragment gives two ends. A plus-strand read gives reference =[start, start+4)=; a minus-strand read gives =[end-4, end)=, reverse-complemented by =bedtools getfasta -s=. 4-mers containing a non-ACGT base are counted in an =OTHER= row. The motif is read from the reference, not the read, so the definition also holds for EM-seq and bisulfite alignments.
+An end motif is the 4 reference bases at the 5′ end of each read. Every paired, primary, mapped, non-duplicate read with MAPQ ≥ 30 (=samtools view -q 30 -f 1 -F 3340=) counts, so a fragment whose two reads both qualify gives two ends. A read whose mate was removed by the read filter (blacklisted bases, MAPQ, flags) still counts, as its mate is not flagged unmapped, and gives the fragment's only end. A plus-strand read gives reference =[start, start+4)=; a minus-strand read gives =[end-4, end)=, reverse-complemented by =bedtools getfasta -s=. 4-mers containing a non-ACGT base are counted in an =OTHER= row. The motif is read from the reference, not the read, so the definition also holds for EM-seq and bisulfite alignments.
 
 This replaces an extraction (=scripts/sample_motifs.sh=) that keyed the end on read number instead of strand. It took the leftmost 4 bases of read 1 and the rightmost 4 bases of read 2, reverse-complemented. When read 1 maps to the minus strand, both branches return the read's 3′ end, which lies inside the fragment whenever the fragment is longer than the read, about 40 % of motifs in Axel Hidalgo's measurement on one EM-seq library (AAAA/TTTT at the top of the table instead of CCCA/CCTG/CCAG). Its subsample drew about 3x the target from the coordinate-sorted BAM and kept the first n with =head=, so later chromosomes were not sampled. It also used MAPQ ≥ 60 and kept duplicate, secondary and supplementary reads. The defect was identified at the [[file:~/meetings/chaudhuri-bioinfo-huddle/2026-09-23-notes.md][bioinfo huddle 2026-09-23]].
 
@@ -2200,9 +2208,11 @@ set -euo pipefail
 # read from the reference. Adapted from extract_5p_motifs.sh by
 # Axel Hidalgo, commit 7a5767ab1 (2026-09-18).
 #
-# Qualifying read: paired, primary, mapped, mate mapped, non-duplicate,
-# MAPQ >= 30 (samtools -q 30 -f 1 -F 3340). Both mates count, so each
-# fragment gives two ends. Plus-strand read: reference [start, start+4).
+# Qualifying read: paired, primary, mapped, mate not flagged unmapped,
+# non-duplicate, MAPQ >= 30 (samtools -q 30 -f 1 -F 3340). Each qualifying
+# read gives one end, so a fragment whose two reads qualify gives two ends;
+# a read whose mate was removed upstream (filter_alignments.sh fixmate does
+# not flag such a mate unmapped) gives one. Plus-strand read: reference [start, start+4).
 # Minus-strand read: reference [end-4, end), reverse-complemented by
 # bedtools getfasta -s. 4-mers with a non-ACGT base are counted as OTHER.
 #
@@ -2445,7 +2455,9 @@ packages <- c("data.table")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+# The helpers sit beside this script; interactive sessions (no --file=) run from the repo root.
+file_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
+script_dir <- if (length(file_arg)) dirname(normalizePath(sub("^--file=", "", file_arg))) else "scripts"
 source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
@@ -2545,7 +2557,9 @@ packages <- c("tidyverse")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+# The helpers sit beside this script; interactive sessions (no --file=) run from the repo root.
+file_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
+script_dir <- if (length(file_arg)) dirname(normalizePath(sub("^--file=", "", file_arg))) else "scripts"
 source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
@@ -2665,7 +2679,9 @@ packages <- c("tidyverse", "data.table")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+# The helpers sit beside this script; interactive sessions (no --file=) run from the repo root.
+file_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
+script_dir <- if (length(file_arg)) dirname(normalizePath(sub("^--file=", "", file_arg))) else "scripts"
 source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
@@ -2872,7 +2888,9 @@ packages <- c("tidyverse")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+# The helpers sit beside this script; interactive sessions (no --file=) run from the repo root.
+file_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
+script_dir <- if (length(file_arg)) dirname(normalizePath(sub("^--file=", "", file_arg))) else "scripts"
 source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
@@ -2973,7 +2991,9 @@ packages <- c("tidyverse")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+# The helpers sit beside this script; interactive sessions (no --file=) run from the repo root.
+file_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
+script_dir <- if (length(file_arg)) dirname(normalizePath(sub("^--file=", "", file_arg))) else "scripts"
 source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
@@ -3114,7 +3134,9 @@ packages <- c("tidyverse")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+# The helpers sit beside this script; interactive sessions (no --file=) run from the repo root.
+file_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
+script_dir <- if (length(file_arg)) dirname(normalizePath(sub("^--file=", "", file_arg))) else "scripts"
 source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
@@ -3263,7 +3285,9 @@ packages <- c("tidyverse")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+# The helpers sit beside this script; interactive sessions (no --file=) run from the repo root.
+file_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
+script_dir <- if (length(file_arg)) dirname(normalizePath(sub("^--file=", "", file_arg))) else "scripts"
 source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
@@ -3508,7 +3532,9 @@ packages <- c("data.table")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+# The helpers sit beside this script; interactive sessions (no --file=) run from the repo root.
+file_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
+script_dir <- if (length(file_arg)) dirname(normalizePath(sub("^--file=", "", file_arg))) else "scripts"
 source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
@@ -4091,7 +4117,7 @@ FRAG_REF_INPUTS         = {name: f"{D_INPUTS}/{a['input']}" for name, a in confi
 FRAG_DELFI_BINS         = config["delfi_bins"]
 FRAG_BLKLIST            = config["blklist"]
 FRAG_CYTOBAND           = config["cytoband"]
-FRAG_END_MOTIF_MAX_ENDS = int(config.get("end_motif", {}).get("max_ends") or 0)   # null in YAML -> 0 = every end; 1e7 or 10000000.0 -> 10000000
+FRAG_END_MOTIF_MAX_ENDS = int(config.get("end_motif", {}).get("max_ends") or 0)   # null in YAML -> 0 = every end; 10000000.0 -> 10000000
 FRAG_END_MOTIF_SEED     = config.get("end_motif", {}).get("seed", 42)
 FRAG_LENGTH_HIST_START  = config.get("length_hist", {}).get("start", 30)
 FRAG_LENGTH_HIST_END    = config.get("length_hist", {}).get("end", 700)
@@ -4458,6 +4484,11 @@ CASES = {
         [plus_motif(181), minus_motif(261, aligned_len=25)],
     ),
     "n_end": (pair("nend", 99, 301, 147, 351), ["OTHER", minus_motif(351)]),
+    # Orphan: its mate was removed upstream; fixmate leaves flag 65, mate "*".
+    "orphan": (
+        ["orph\t65\tchrT\t321\t60\t30M\t*\t0\t0\t*\t*"],
+        [plus_motif(321)],
+    ),
 }
 
 
@@ -4858,7 +4889,7 @@ def test_wrong_header_fails(tmp_path):
 #+end_src
 
 *** Pinned outputs
-The fixture run's deterministic outputs are checked by =tools/check_expected_outputs.sh tests/full=, which prints =ok= or =DIFF= per file and exits 1 on any difference; =--write= regenerates the expectations. Byte-stable files (28) are pinned by md5 in =tests/expected_outputs.md5= (a =.gz= file is summed on its decompressed bytes): the per-bin counts, fragment BEDs and GC distributions, ratios and row-normalized ratios, length histograms, end-motif counts and matrices, motif diversity, and the read regions and DELFI bins. Five floating-point tables change in their last digits with the BLAS kernel (the NMF W and H matrices, the F-profiles, the motif-per-F-profile table and the arm z-scores; their md5 differed between =OPENBLAS_CORETYPE= Haswell, SkylakeX and Prescott, by at most 4.2 × 10⁻¹² absolute), so they are compared numerically against copies in =tests/expected/=: same shape and row and column labels, and =numpy.isclose= with =rtol= 1e-6 and =atol= 1e-9. The check also fails when the md5 file does not list exactly the pinned file set, so an empty or truncated pin file cannot pass. Left out: the filtered BAMs (their headers differ between runs), the three QC PDFs and the two fastp HTML reports (both differed between runs), the fastp JSON and processed FASTQs (their content depends on fastp's threading and the paths it records), the aligned BAMs and the BWA index (large binaries downstream steps already cover), and =healthy_med.rds= (R serialization format depends on the R version).
+The fixture run's deterministic outputs are checked by =tools/check_expected_outputs.sh tests/full=, which prints =ok= or =DIFF= per file and exits 1 on any difference; =--write= regenerates the expectations. Byte-stable files (28) are pinned by md5 in =tests/expected_outputs.md5= (a =.gz= file is summed on its decompressed bytes): the per-bin counts, fragment BEDs and GC distributions, ratios and row-normalized ratios, length histograms, end-motif counts and matrices, motif diversity, and the read regions and DELFI bins. Five floating-point tables change in their last digits with the BLAS kernel (the NMF W and H matrices, the F-profiles, the motif-per-F-profile table and the arm z-scores; their md5 differed between =OPENBLAS_CORETYPE= Haswell, SkylakeX and Prescott, by at most 4.2 × 10⁻¹² absolute), so they are compared numerically against copies in =tests/expected/=: same shape and row and column labels, and =numpy.isclose= with =rtol= 1e-6 and =atol= 1e-9. The check also fails when the md5 file does not list exactly the pinned file set, so an empty or truncated pin file cannot pass. The arm z-score table is a weak check on this fixture: both libraries are the healthy reference and chr22 has one scored arm, so the two z-scores are always ±0.7071 whatever the counts; the pinned per-bin counts carry the check on the inputs to that step. Left out: the filtered BAMs (their headers differ between runs), the three QC PDFs and the two fastp HTML reports (both differed between runs), the fastp JSON and processed FASTQs (their content depends on fastp's threading and the paths it records), the aligned BAMs and the BWA index (large binaries downstream steps already cover), and =healthy_med.rds= (R serialization format depends on the R version).
 
 #+begin_src bash :tangle ./tools/check_expected_outputs.sh
 #!/usr/bin/env bash
@@ -5119,7 +5150,7 @@ FRAG_REF_INPUTS         = {name: f"{D_INPUTS}/{a['input']}" for name, a in confi
 FRAG_DELFI_BINS         = config["delfi_bins"]
 FRAG_BLKLIST            = config["blklist"]
 FRAG_CYTOBAND           = config["cytoband"]
-FRAG_END_MOTIF_MAX_ENDS = int(config.get("end_motif", {}).get("max_ends") or 0)   # null in YAML -> 0 = every end; 1e7 or 10000000.0 -> 10000000
+FRAG_END_MOTIF_MAX_ENDS = int(config.get("end_motif", {}).get("max_ends") or 0)   # null in YAML -> 0 = every end; 10000000.0 -> 10000000
 FRAG_END_MOTIF_SEED     = config.get("end_motif", {}).get("seed", 42)
 FRAG_LENGTH_HIST_START  = config.get("length_hist", {}).get("start", 30)
 FRAG_LENGTH_HIST_END    = config.get("length_hist", {}).get("end", 700)

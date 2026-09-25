@@ -19,7 +19,7 @@ frag_ref_assemblies:
     name: ncbi_hg38
     input: GCA_000001405.15_GRCh38_no_alt_analysis_set.fa.gz
 
-delfi_bins: resources/data/delfi_bins_hg38.tsv
+delfi_bins: ${HOME}/repos/frag/resources/data/delfi_bins_hg38.tsv   # the bin table shipped in the frag repository
 blklist: /path/to/hg38-blacklist.v2.bed.gz
 cytoband: /path/to/cytoBand.txt
 

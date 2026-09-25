@@ -14,7 +14,9 @@ packages <- c("data.table")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+# The helpers sit beside this script; interactive sessions (no --file=) run from the repo root.
+file_arg <- grep("^--file=", commandArgs(FALSE), value = TRUE)
+script_dir <- if (length(file_arg)) dirname(normalizePath(sub("^--file=", "", file_arg))) else "scripts"
 source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
