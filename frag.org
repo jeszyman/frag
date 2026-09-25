@@ -2,6 +2,47 @@
 * Cell-free DNA Fragmentomics Analysis                              :biopipe:
 - [ ] ingest https://github.com.mcas.ms/epifluidlab/FinaleToolkit
 - [ ] could probably go a little heavier on data size to test
+** Plans
+:PROPERTIES:
+:TODO_SET: plans
+:PLANS_SINCE: [2026-09-25 Fri]
+:END:
+*** COMPLETE frag repository restructure
+:PROPERTIES:
+:ID:       31c5217d-ee52-4127-9ba5-129cca04358f
+:END:
+[[file:docs/superpowers/plans/2026-03-12-frag-restructure-plan.md]]
+*** COMPLETE NF1 fragmentomics feature migration
+:PROPERTIES:
+:ID:       b798ffe9-5622-466a-88c7-95743872c743
+:END:
+[[file:docs/superpowers/plans/2026-03-13-nf1-feature-migration.md]]
+*** COMPLETE frag to biopipe standard conformance, Pass 1
+:PROPERTIES:
+:ID:       c6b76c36-deee-4b7c-aff2-26b421b22ac5
+:END:
+[[file:docs/superpowers/plans/2026-06-09-frag-biopipe-conformance-plan.md]]
+*** COMPLETE frag_checks Pass 2a
+:PROPERTIES:
+:ID:       54373b91-55d0-4e23-8147-ea16c1d025d6
+:END:
+[[file:docs/superpowers/plans/2026-06-10-frag-checks-pass2a-plan.md]]
+*** COMPLETE frag_checks Pass 2b
+:PROPERTIES:
+:ID:       1d6124ca-7c40-4b4f-bf9c-951735362df0
+:END:
+[[file:docs/superpowers/plans/2026-06-10-frag-checks-pass2b-plan.md]]
+*** COMPLETE frag v2, strand-aware end motifs and biopipe conformance
+:PROPERTIES:
+:ID:       698b670f-7dc6-46e2-9665-d4b9298f6c48
+:END:
+[[file:docs/superpowers/plans/2026-09-24-frag-v2-end-motif-biopipe-plan.md]]
+*** COMPLETE frag v2, round 2 (read regions, DELFI bins, duplicates, full biopipe structure)
+:PROPERTIES:
+:ID:       af923062-0644-4875-b275-e090acb97c3e
+:END:
+- [[file:docs/superpowers/plans/2026-09-24-frag-v2-round2-plan.md]]
+- Handoff: [[file:docs/superpowers/plans/2026-09-24-frag-v2-handoff.md]]
 ** README
 :PROPERTIES:
 :ID:       339b69f6-6c09-4e9d-a2ec-27bdf5747163
