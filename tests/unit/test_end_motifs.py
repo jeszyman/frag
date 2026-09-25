@@ -55,8 +55,8 @@ def rec(name, flag, pos, mapq=60, cigar="30M", pnext=0):
     return f"{name}\t{flag}\tchrT\t{pos}\t{mapq}\t{cigar}\t=\t{pnext}\t0\t*\t*"
 
 
-def pair(name, f1, p1, f2, p2, mapq=60, cigar1="30M"):
-    return [rec(name, f1, p1, mapq, cigar1, p2), rec(name, f2, p2, mapq, "30M", p1)]
+def pair(name, f1, p1, f2, p2, mapq=60, cigar1="30M", cigar2="30M"):
+    return [rec(name, f1, p1, mapq, cigar1, p2), rec(name, f2, p2, mapq, cigar2, p1)]
 
 
 # Each entry: SAM lines, and the ends the definition counts from them.
@@ -75,6 +75,15 @@ CASES = {
         [],
     ),
     "mapq29": (pair("lowq", 99, 71, 147, 171, mapq=29), []),
+    # MAPQ boundary: 30 is the lowest counted value; 59 fails a MAPQ 60 cut.
+    "mapq30": (
+        pair("q30", 99, 141, 147, 221, mapq=30),
+        [plus_motif(141), minus_motif(221)],
+    ),
+    "mapq59": (
+        pair("q59", 99, 161, 147, 241, mapq=59),
+        [plus_motif(161), minus_motif(241)],
+    ),
     # QC-fail (0x200) reads are kept, as in the reference implementation.
     "qcfail": (
         pair("qcf", 99 + 512, 131, 147 + 512, 260),
@@ -85,13 +94,18 @@ CASES = {
         pair("sc", 99, 101, 147, 250, cigar1="5S25M"),
         [plus_motif(101), minus_motif(250)],
     ),
+    # Soft clip at a minus read's 5' end (25M5S): the end is the last aligned base.
+    "softclip_minus": (
+        pair("scm", 99, 181, 147, 261, cigar2="25M5S"),
+        [plus_motif(181), minus_motif(261, aligned_len=25)],
+    ),
     "n_end": (pair("nend", 99, 301, 147, 351), ["OTHER", minus_motif(351)]),
 }
 
 
-def write_fixture(tmp_path, sam_lines):
+def write_fixture(tmp_path, sam_lines, ref=REF):
     fa = tmp_path / "ref.fa"
-    fa.write_text(">chrT\n" + REF + "\n")
+    fa.write_text(">chrT\n" + ref + "\n")
     subprocess.run(["samtools", "faidx", str(fa)], check=True)
     sam = tmp_path / "in.sam"
     sam.write_text(
@@ -158,6 +172,55 @@ def test_read1_minus_takes_fragment_5prime_end(tmp_path):
     ), "fixture seed makes an interior motif equal a true end"
     assert {m: c for m, c in got.items() if c} == dict(true_ends)
     assert all(got[m] == 0 for m in interior)
+
+
+def test_soft_masked_reference_gives_uppercase_motifs(tmp_path):
+    """Lowercase (soft-masked) reference bases are counted as their uppercase motif."""
+    bam, fa = write_fixture(tmp_path, CASES["r1_plus"][0], ref=REF.lower())
+    _, got = run_script(tmp_path, bam, fa)
+    assert {m: c for m, c in got.items() if c} == dict(Counter(CASES["r1_plus"][1]))
+
+
+def two_contig_fixture(tmp_path, n_pairs, seed=5):
+    """chrA is all A, chrB all C. Every pair has mate 1 on chrA (plus strand, end
+    AAAA) and mate 2 on chrB (minus strand, end GGGG)."""
+    fa = tmp_path / "ab.fa"
+    fa.write_text(">chrA\n" + "A" * 1000 + "\n>chrB\n" + "C" * 1000 + "\n")
+    subprocess.run(["samtools", "faidx", str(fa)], check=True)
+    rng = random.Random(seed)
+    lines = []
+    for i in range(n_pairs):
+        pa, pb = rng.randint(1, 900), rng.randint(1, 900)
+        lines.append(f"p{i}\t97\tchrA\t{pa}\t60\t30M\tchrB\t{pb}\t0\t*\t*")
+        lines.append(f"p{i}\t145\tchrB\t{pb}\t60\t30M\tchrA\t{pa}\t0\t*\t*")
+    sam = tmp_path / "ab.sam"
+    sam.write_text(
+        "@HD\tVN:1.6\tSO:unsorted\n@SQ\tSN:chrA\tLN:1000\n@SQ\tSN:chrB\tLN:1000\n"
+        + "\n".join(lines)
+        + "\n"
+    )
+    bam = tmp_path / "ab.bam"
+    subprocess.run(["samtools", "sort", "-o", str(bam), str(sam)], check=True)
+    subprocess.run(["samtools", "index", str(bam)], check=True)
+    return bam, fa
+
+
+def test_subsample_is_by_pair_genome_wide_sized_and_seeded(tmp_path):
+    """max_ends = half the reads. Mates are kept together, so chrA ends (AAAA/TTTT)
+    equal chrB ends (CCCC/GGGG); a coordinate-order cut would take chrA first. The
+    total is within 10 % of max_ends; seeds 42 and 43 draw different samples; the
+    same seed gives the same output."""
+    n_pairs = 2000
+    bam, fa = two_contig_fixture(tmp_path, n_pairs)
+    _, a = run_script(tmp_path, bam, fa, max_ends=n_pairs, seed=42, name="a.tsv")
+    _, a2 = run_script(tmp_path, bam, fa, max_ends=n_pairs, seed=42, name="a2.tsv")
+    _, b = run_script(tmp_path, bam, fa, max_ends=n_pairs, seed=43, name="b.tsv")
+    chr_a = a["AAAA"] + a["TTTT"]
+    chr_b = a["CCCC"] + a["GGGG"]
+    assert chr_a > 0 and chr_a == chr_b
+    assert abs(sum(a.values()) - n_pairs) <= 0.1 * n_pairs
+    assert a == a2
+    assert a != b
 
 
 def many_pairs(n, seed=3):
