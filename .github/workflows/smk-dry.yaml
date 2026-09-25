@@ -4,6 +4,7 @@ on:
   push:
     branches: [master]
     paths:
+      - "frag.org"
       - "workflows/**"
       - "config/**"
       - "scripts/**"
@@ -14,6 +15,7 @@ on:
       - ".github/workflows/smk-dry.yaml"
   pull_request:
     paths:
+      - "frag.org"
       - "workflows/**"
       - "config/**"
       - "scripts/**"
@@ -38,10 +40,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up micromamba
-        uses: mamba-org/setup-micromamba@v1
+        uses: mamba-org/setup-micromamba@v3
         with:
           environment-file: envs/frag-conda-env.yaml
           environment-name: frag
@@ -57,7 +59,7 @@ jobs:
       - name: Show environment info
         run: |
           micromamba run -n frag snakemake --version
-          micromamba run -n frag samtools --version || true
+          micromamba run -n frag samtools --version
 
       - name: Snakemake dry-run
         run: |
@@ -71,4 +73,4 @@ jobs:
 
       - name: Unit tests
         run: |
-          micromamba run -n frag python -m pytest -q tests/unit
+          FRAG_REQUIRE_TOOLS=1 micromamba run -n frag python -m pytest -q -rs tests/unit

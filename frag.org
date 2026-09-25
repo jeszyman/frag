@@ -445,13 +445,11 @@ on:
     branches: [master]
     paths:
       - "tools/get_test_data.sh"
-      - "tests/**"
       - "envs/**"
       - ".github/workflows/test-data.yaml"
   pull_request:
     paths:
       - "tools/get_test_data.sh"
-      - "tests/**"
       - "envs/**"
       - ".github/workflows/test-data.yaml"
   schedule:
@@ -474,7 +472,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Verify env file exists
         run: |
@@ -482,26 +480,29 @@ jobs:
           test -f envs/frag-conda-env.yaml || { echo "Missing: envs/frag-conda-env.yaml"; exit 1; }
 
       - name: Setup Conda (Miniforge3)
-        uses: conda-incubator/setup-miniconda@v3
+        uses: conda-incubator/setup-miniconda@v4
         with:
           miniforge-variant: Miniforge3
           auto-activate-base: true
           use-mamba: true
 
+      # conda config --add prepends, so bioconda is added first and conda-forge
+      # ends on top: conda-forge, then bioconda, strict priority.
       - name: Configure channels (strict)
         run: |
           set -euo pipefail
           conda config --set channel_priority strict
           conda config --remove-key channels || true
-          conda config --add channels conda-forge
           conda config --add channels bioconda
+          conda config --add channels conda-forge
+          conda config --show channels
 
       - name: Create env
         run: |
           set -euo pipefail
           mamba env create -n frag -f envs/frag-conda-env.yaml -vv || \
             conda env create -n frag -f envs/frag-conda-env.yaml -vv
-          conda run -n frag samtools --version || true
+          conda run -n frag samtools --version
 
       - name: Execute get_test_data.sh + sanity checks
         run: |
@@ -525,6 +526,7 @@ on:
   push:
     branches: [master]
     paths:
+      - "frag.org"
       - "workflows/**"
       - "config/**"
       - "scripts/**"
@@ -535,6 +537,7 @@ on:
       - ".github/workflows/smk-dry.yaml"
   pull_request:
     paths:
+      - "frag.org"
       - "workflows/**"
       - "config/**"
       - "scripts/**"
@@ -559,10 +562,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up micromamba
-        uses: mamba-org/setup-micromamba@v1
+        uses: mamba-org/setup-micromamba@v3
         with:
           environment-file: envs/frag-conda-env.yaml
           environment-name: frag
@@ -578,7 +581,7 @@ jobs:
       - name: Show environment info
         run: |
           micromamba run -n frag snakemake --version
-          micromamba run -n frag samtools --version || true
+          micromamba run -n frag samtools --version
 
       - name: Snakemake dry-run
         run: |
@@ -592,7 +595,7 @@ jobs:
 
       - name: Unit tests
         run: |
-          micromamba run -n frag python -m pytest -q tests/unit
+          FRAG_REQUIRE_TOOLS=1 micromamba run -n frag python -m pytest -q -rs tests/unit
 #+end_src
 
 #+begin_src yaml :tangle ./.github/workflows/smk-run.yaml :mkdirp yes
@@ -602,6 +605,7 @@ on:
   push:
     branches: [master]
     paths:
+      - "frag.org"
       - "workflows/**"
       - "config/**"
       - "scripts/**"
@@ -612,6 +616,7 @@ on:
       - ".github/workflows/smk-run.yaml"
   pull_request:
     paths:
+      - "frag.org"
       - "workflows/**"
       - "config/**"
       - "scripts/**"
@@ -636,10 +641,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up micromamba
-        uses: mamba-org/setup-micromamba@v1
+        uses: mamba-org/setup-micromamba@v3
         with:
           environment-file: envs/frag-conda-env.yaml
           environment-name: frag
@@ -652,6 +657,7 @@ jobs:
           test -f workflows/test.smk
           test -f config/test.yaml
 
+      # One-env repo: every rule runs inside the env built above, so no --use-conda.
       - name: Snakemake run
         run: |
           micromamba run -n frag snakemake \
@@ -659,12 +665,15 @@ jobs:
             --configfile config/test.yaml \
             --cores 4 \
             --printshellcmds \
-            --rerun-incomplete \
-            --use-conda
+            --rerun-incomplete
 
       - name: Check pinned outputs
         run: |
-          bash tools/check_expected_outputs.sh tests/full
+          micromamba run -n frag bash tools/check_expected_outputs.sh tests/full
+
+      - name: Unit tests
+        run: |
+          FRAG_REQUIRE_TOOLS=1 micromamba run -n frag python -m pytest -q -rs tests/unit
 #+end_src
 
 *** LICENSE
