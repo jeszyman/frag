@@ -84,7 +84,7 @@ frag/
 
 *** Change log
 - Development since last tag
-  - [2026-09-24 Thu] Read regions, duplicates and bins (round 2 of v2). Every motif, motif-diversity, F-profile, fragment-length, ratio and arm z-score output changes. The filtered BAM keeps reads on chr1 to chr22 outside blacklisted bases (new rule =frag_read_regions=, =bedtools subtract= of the blacklist, restoring the 2022 logic) instead of reads inside whole blacklist-free GC-filtered 5 Mb windows, which kept 1,573 Mb on kh_01 and no chrX; it also drops unmapped, secondary, duplicate and supplementary reads (=samtools view -q 30 -F 3332=). The alignment step marks duplicates (=samtools fixmate -m=, sort, =samtools markdup=). Fragment counts use DELFI 5 Mb bins rebuilt on hg38 by the Mathios 2021 rule (GC ≥ 0.3, Umap k100 mappability ≥ 0.9; 487 bins, 2.435 Gb; =resources/data/delfi_bins_hg38.tsv=, built by =tools/make_delfi_bins.py=); config key =delfi_bins= replaces =gc5mb=. Verified: fixture run completes; kh_01 rerun under Validation.
+  - [2026-09-24 Thu] Read regions, duplicates and bins (round 2 of v2). Every motif, motif-diversity, F-profile, fragment-length, ratio and arm z-score output changes. The filtered BAM keeps reads on chr1 to chr22 outside blacklisted bases (new rule =frag_read_regions=, =bedtools subtract= of the blacklist, restoring the 2022 logic) instead of reads inside whole blacklist-free GC-filtered 5 Mb windows, which kept 1,573 Mb on kh_01 and no chrX; it also drops unmapped, secondary, duplicate and supplementary reads (=samtools view -q 30 -F 3332=). The alignment step marks duplicates (=samtools fixmate -m=, sort, =samtools markdup=). Fragment counts use DELFI 5 Mb bins rebuilt on hg38 by the Mathios 2021 rule (GC ≥ 0.3, Umap k100 mappability ≥ 0.9; 487 bins, 2.435 Gb; =resources/data/delfi_bins_hg38.tsv=, built by =tools/make_delfi_bins.py=); config key =delfi_bins= replaces =gc5mb=. On kh_01 (Validation) 11.9 % of primary reads are duplicates, the read regions keep 2.69 Gb of the 2.88 Gb of autosomes, 290,002,628 ends are counted (CC-end share 0.159, r = 0.9996 against round 1), and all 487 bins hold fragments. Verified: fixture run completes; kh_01 rerun exits 0.
   - [2026-09-24 Thu] Module contract and structure. Wrappers bind =R_FRAG= from the new key =repo-dir= and rules run =R_FRAG/scripts/...=, so the module works when included from another directory; every rule declares a concurrency cost and the new key =available-concurrency= sets the budget; the schema allows one reference and requires at least one healthy library, which must be among the selected libraries. The root =Snakefile= sets the fixture as its default target. Fixture pins hold across BLAS kernels (5 floating-point tables compared numerically) and fail when the pin file is truncated. New unit tests cover the read regions, the DELFI bins, the module contract and the subsampling, MAPQ, soft-clip and soft-mask cases of the end-motif extractor; =FRAG_REQUIRE_TOOLS=1= (set in CI) makes a missing tool an error. CI runs the fixture inside the env it builds, on node24 action versions. =frag.org= follows the biopipe notebook skeleton (README, Repository setup with test-data tool, GitHub tests, LICENSE and CITATION blocks, processing Overview, Reference preparation, Reference, one Ideas). Snakemake is pinned to 9.21.0. Verified: unit tests pass; fixture run completes; pins ok.
   - [2026-09-24 Thu] End motifs are counted strand-aware from the reference at the 5′ end of every paired, primary, mapped, non-duplicate read with MAPQ ≥ 30 (=samtools view -q 30 -f 1 -F 3340=, both mates). The previous extraction keyed the end on read number (read 1's leftmost 4 bases, read 2's rightmost 4 bases reverse-complemented), so for every pair whose read 1 maps to the minus strand it returned the read's 3′ end, interior to the fragment whenever the fragment is longer than the read (about 40 % of motifs in Axel Hidalgo's measurement on one EM-seq library); its subsample was truncated in coordinate order, and it used MAPQ 60 and kept duplicates. =scripts/frag_end_motifs.sh= and =scripts/frag_motif_matrix.py= are adapted from the extractor by Axel Hidalgo, commit 7a5767ab1 (2026-09-18); rule =frag_sample_motifs= is now =frag_end_motifs=, per-library outputs are =motifs/{library_id}.{ref_name}.motif_counts.tsv= (256 motifs plus =OTHER=), and a motif x library count matrix is written beside =all_motifs.tsv=. Config =end_motif.max_ends= (null counts every end) and =end_motif.seed= replace =n_motif= and =n_reads=. This changes every motif, motif-diversity and F-profile output, and changes the module interface, so v2.0.0 is the intended next tag. On the chr22 fixture lib001 counts 3,068 ends (CC-end share 0.121) and lib002 2,979 (0.105). On the full-genome healthy library kh_01 (Validation) every one of 192,998,342 qualifying reads is counted, CCCA, CCTG and CCAG lead the table (the old extraction had AAAA second), the CC-end share is 0.157 against 0.112 for the old extraction, and a 10 M =max_ends= subsample reproduces the all-ends fractions (r = 0.99998) with every chromosome sampled in proportion, where the old extraction sampled only chr1 to chr11. Verified: 10 known-answer unit tests pass; fixture run completes; kh_01 runs exit 0.
   - [2026-09-24 Thu] Repository brought to the current biopipe standard. The conda env moves to =envs/frag-conda-env.yaml= with every package pinned (snakemake 9.14.5, samtools 1.24, bedtools 2.31.1, plus jsonschema and pytest). =workflows/frag.smk= reads no config: the wrappers bind every value as a variable, listed in the module preamble. =config/config.schema.yaml= and =check_config()= validate the config at startup. =config/common.yaml= and =config/samples.tsv= are templates; the fixture sheet is =config/samples_test.tsv=; a one-line root =Snakefile= includes the test wrapper; fixture logs and benchmarks go under =tests/full/=. Reference data files move to =resources/data/=, the DAG to =resources/figures/frag.dag.png=; tracked =docs/= files are untracked; =LICENSE= (MIT) and =CITATION.cff= are added; =config/int_test.yaml= (read by nothing) and the copied reference implementation folder are removed. The full-genome kh_01 wrapper and config get org blocks under Validation, which also records the kh_01 end-motif comparison. 32 deterministic fixture outputs are pinned in =tests/expected_outputs.md5= and checked by =tools/check_expected_outputs.sh=. CI triggers on push to master and pull requests, and runs the unit tests and the pin check. This change log replaces =CHANGELOG.md=. Verified: unit tests pass; fixture run completes; every pin ok on a clean run.
@@ -5531,6 +5531,77 @@ Share of reads per chromosome: every mapped read of the filtered BAM (=samtools 
 | chrX       |      0 |              0 |      0 |
 
 The strand-aware extractor puts the CC-initiated motifs (CCCA, CCTG, CCAG) at the top of the table, and AAAA falls from second to eleventh, as expected once interior 3′ ends are no longer counted. The published healthy-plasma figures agree with the new extraction, not the old one. In Table 1 of Chan et al. (2020, Am J Hum Genet 107:882), the six CC motifs CCCA, CCAG, CCTG, CCAA, CCCT and CCAT account together for 10.64 % (range 9.76 % to 11.69 %) of plasma end motifs in healthy controls, and the eleven CC motifs among the table's top 25 sum to 16.51 %, so the share of all 16 CC motifs is at least 0.165. kh_01 under the new extraction gives 0.0966 for the six motifs, 0.151 for the eleven and 0.157 for all 16; the old extraction's 0.112 for all 16 lies well below the published figure. The 0.11 to 0.12 expectation stated before this check was the six-motif figure read as a share of all CC motifs. The 10 M subsample reproduces the all-ends motif fractions (r = 0.99998, largest difference in any motif fraction 6.8 × 10⁻⁵) and samples every chromosome in proportion to its reads to within 0.0002. The old script's reads come only from chr1 to chr11, because its coordinate-ordered draw was cut at one million reads, and chr12 to chr22 contribute no motifs. The filtered BAM carries no chrX reads (and 556,573 chrY reads, not tabulated).
+
+*** kh_01 with read regions, duplicate marking and DELFI bins
+kh_01 was rerun on [2026-09-24 Thu] with the round-2 read filter in =/mnt/data/projects/cfdna/frag/validation/end_motifs_2026-09-24/round2/= on jeff-beast. Duplicates were marked on the existing coordinate-sorted BAM (=samtools collate=, =fixmate -m=, sort, =markdup=, as the alignment step now does); the hg38 read regions were built and the BAM filtered with the tangled =frag_read_regions.sh= and =filter_alignments.sh=; every end was counted with =frag_end_motifs.sh= (the copy run differs from the committed one only in its header comment); and fragments were counted in the DELFI bins by the leftmost position of each first-in-pair read.
+
+| Measure                                   | Round 1 (whole 5 Mb windows, duplicates kept) | Round 2 (autosomes minus blacklisted bases, duplicates removed) |
+|-------------------------------------------+-----------------------------------------------+-----------------------------------------------------------------|
+| Primary reads marked duplicate            | not marked                                    | 44,888,495 of 377,997,866 (11.9 %)                              |
+| Read regions                              | 1,573 Mb of windows                           | 2,688,205,822 of 2,875,001,522 autosome bp, 493 intervals       |
+| Reads in the filtered BAM                 | 192,998,342 qualifying                        | 290,356,608 (no secondary, supplementary or duplicate)          |
+| Ends counted (every end)                  | 192,998,342                                   | 290,002,628                                                     |
+| =OTHER=                                     | 27                                            | 125                                                             |
+| CC-end share (16 motifs)                  | 0.1570                                        | 0.1590                                                          |
+| Six Chan 2020 CC motifs                   | 0.0966                                        | 0.0976                                                          |
+| Five most frequent motifs                 | CCCA, CCTG, CCAG, CCTT, CCCT                  | CCCA, CCTG, CCAG, CCTT, CCCT                                    |
+| Pearson r of the 256 fractions vs round 1 | 1                                             | 0.9996                                                          |
+| DELFI bins with no fragment               | (not built)                                   | 0 of 487 (239,414 to 307,958 fragments per bin, median 273,370) |
+
+Share of the filtered BAM's reads per chromosome in round 2 (=samtools idxstats=); chrX, chrY, chrM and all other contigs hold none:
+
+|   chr1 |   chr2 |   chr3 |   chr4 |   chr5 |   chr6 |   chr7 |   chr8 |   chr9 |  chr10 |  chr11 |
+|--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+--------|
+| 0.0850 | 0.0878 | 0.0726 | 0.0677 | 0.0650 | 0.0625 | 0.0570 | 0.0530 | 0.0421 | 0.0500 | 0.0500 |
+
+|  chr12 |  chr13 |  chr14 |  chr15 |  chr16 |  chr17 |  chr18 |  chr19 |  chr20 |  chr21 |  chr22 |
+|--------+--------+--------+--------+--------+--------+--------+--------+--------+--------+--------|
+| 0.0491 | 0.0350 | 0.0330 | 0.0300 | 0.0296 | 0.0304 | 0.0279 | 0.0214 | 0.0242 | 0.0127 | 0.0138 |
+
+The new read regions keep 1.7 times the sequence the whole-window rule kept, and the per-chromosome shares now follow chromosome size (chr3 0.073 against 0.026 in round 1, where every window touching a blacklisted interval was dropped). Removing duplicates and widening the regions changes the motif fractions very little (r = 0.9996). The CC-end share and the six-motif share move by 0.002 and 0.001 from round 1; the six-motif share, 0.0976, sits at the lower end of the Chan et al. healthy range (9.76 % to 11.69 %). Every DELFI bin holds fragments.
+
+#+begin_src bash :tangle no
+#!/usr/bin/env bash
+set -euo pipefail
+export PATH=$HOME/miniconda3/envs/frag/bin:$PATH
+cd /mnt/data/projects/cfdna/frag/validation/end_motifs_2026-09-24/round2
+IN=/mnt/data/projects/cfdna/frag/bams/kh_01.bwa.ncbi_hg38.coorsort.bam
+mkdir -p tmp
+date
+samtools collate -@ 16 -O -u $IN tmp/collate   | samtools fixmate -@ 8 -m -u - -   | samtools sort -@ 32 -m 1G -u -T tmp/sort -   | samtools markdup -@ 32 -T tmp/md -f kh_01.markdup.stats - kh_01.bwa.ncbi_hg38.markdup.bam
+samtools index -@ 32 kh_01.bwa.ncbi_hg38.markdup.bam
+samtools flagstat -@ 32 kh_01.bwa.ncbi_hg38.markdup.bam > kh_01.markdup.flagstat
+date
+echo done > markdup.done
+#+end_src
+
+#+begin_src bash :tangle no
+#!/usr/bin/env bash
+# kh_01 round 2: read regions, filter, end motifs (all ends), DELFI bin counts.
+# Scripts are the worktree tangles copied into scripts/ beside this file.
+set -euo pipefail
+R=/mnt/data/projects/cfdna/frag/validation/end_motifs_2026-09-24/round2
+cd "$R"
+export PATH=/mnt/data/projects/cfdna/frag/ref_v2/env/bin:$PATH
+export TMPDIR_SAMTOOLS=$R/tmp
+F=/mnt/data/projects/cfdna/frag/ref/bwa/ncbi_hg38/ncbi_hg38.fa
+BLK=/mnt/data/projects/cfdna/frag/hg38-blacklist.v2.bed.gz
+MD=kh_01.bwa.ncbi_hg38.markdup.bam
+date
+bash scripts/frag_read_regions.sh "$F.fai" "$BLK" ncbi_hg38.read_regions.bed 2> read_regions.log
+bash scripts/filter_alignments.sh "$MD" ncbi_hg38.read_regions.bed 32 kh_01.bwa.ncbi_hg38.filt.bam 2> filter.log
+samtools flagstat -@ 32 kh_01.bwa.ncbi_hg38.filt.bam > kh_01.filt.flagstat
+samtools idxstats kh_01.bwa.ncbi_hg38.filt.bam > kh_01.filt.idxstats
+bash scripts/frag_end_motifs.sh kh_01.bwa.ncbi_hg38.filt.bam "$F" kh_01.round2.all.tsv 16 0 42 2> end_motifs.log
+samtools view -c -q 30 -f 1 -F 3340 -@ 16 kh_01.bwa.ncbi_hg38.filt.bam > n_qualifying.txt
+bash scripts/frag_delfi_bins.sh /mnt/data/projects/cfdna/frag/ref_v2/delfi_bins_hg38.tsv "$F.fai" ncbi_hg38.delfi_bins.bed 2> delfi_bins.log
+# fragments per bin: first-in-pair reads of the filtered BAM, binned by leftmost position (bins start at multiples of 5 Mb)
+samtools view -f 64 -F 3340 -@ 16 kh_01.bwa.ncbi_hg38.filt.bam | cut -f3,4 \
+  | awk -F"\t" "{c[\$1 \"\t\" int((\$2 - 1) / 5000000) * 5000000]++} END {for (k in c) print k \"\t\" c[k]}" > kh_01.bin_start_counts.tsv
+awk -F"\t" "BEGIN{OFS=\"\t\"} NR==FNR {c[\$1 \"\t\" \$2] = \$3; next} {print \$0, c[\$1 \"\t\" \$2] + 0}" kh_01.bin_start_counts.tsv ncbi_hg38.delfi_bins.bed > kh_01.delfi_bin_counts.bed
+date
+echo done > round2.done
+#+end_src
 
 *** Known deviations from the biopipe standard
 - Research material stays in this repository: the =:bioinfo-dev:= fragment-window notebook section of =frag.org= (with its own :noexport: Ideas), and =dev/=, =data/= and =plots/=.
