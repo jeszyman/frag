@@ -1,6 +1,8 @@
 #!/usr/bin/env Rscript
 ## frag_checks.R — data-integrity helpers for frag analysis scripts.
-## Source with: source("scripts/frag_checks.R")
+## Source from a script in the same directory:
+##   script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+##   source(file.path(script_dir, "frag_checks.R"))
 
 ## Log row count to stderr; return x invisibly for piping.
 log_n <- function(x, label = "rows") {

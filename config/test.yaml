@@ -1,3 +1,6 @@
+available-concurrency: 100
+repo-dir: .
+
 conda:
   frag: "../envs/frag-conda-env.yaml"
 

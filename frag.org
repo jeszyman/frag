@@ -285,8 +285,15 @@ A run is configured by one YAML file, checked at startup against =config/config.
 $schema: "https://json-schema.org/draft/2020-12/schema"
 title: frag wrapper configuration (workflows/test.smk, workflows/cfdna-test.smk)
 type: object
-required: [conda, directories, sample-tsv-path, frag_ref_assemblies, delfi_bins, blklist, cytoband]
+required: [available-concurrency, repo-dir, conda, directories, sample-tsv-path, frag_ref_assemblies, delfi_bins, blklist, cytoband, healthy_libraries]
 properties:
+  available-concurrency:
+    type: integer
+    minimum: 1
+    description: "concurrency budget; each rule declares a cost (alignment 100, light rules 10); --resources concurrency=N overrides"
+  repo-dir:
+    type: string
+    description: "frag repository root (scripts run from repo-dir/scripts), relative to the run directory or absolute"
   conda:
     type: object
     required: [frag]
@@ -308,7 +315,8 @@ properties:
   frag_ref_assemblies:
     type: object
     minProperties: 1
-    description: "reference name -> assembly; the name is the {ref_name} wildcard and must not contain a dot"
+    maxProperties: 1
+    description: "reference name -> assembly; exactly one (the read regions, DELFI bins and counts directory are per run); the name is the {ref_name} wildcard and must not contain a dot"
     propertyNames: {pattern: "^[^.]+$"}
     additionalProperties:
       type: object
@@ -323,6 +331,7 @@ properties:
   cytoband: {type: string, description: UCSC cytoBand table for chromosome arms}
   healthy_libraries:
     type: array
+    minItems: 1
     items: {type: string}
     description: library ids used as the healthy reference (GC summary, arm z-scores)
   fastp:
@@ -360,6 +369,9 @@ properties:
 *** Config template
 #+begin_src yaml :tangle ./config/common.yaml
 # frag configuration template. Replace every /path/to value; paths expand ${HOME}.
+available-concurrency: 100
+repo-dir: ${HOME}/repos/frag
+
 conda:
   frag: "../envs/frag-conda-env.yaml"
 
@@ -410,10 +422,16 @@ SAMPLE2_R1.fastq.gz	SAMPLE2_R2.fastq.gz	sample2	cancer
 #+end_src
 
 *** Root Snakefile
-The root =Snakefile= runs the fixture wrapper, so =snakemake --configfile config/test.yaml= from the repository root runs the test pipeline.
+The root =Snakefile= runs the fixture wrapper, so =snakemake -n= from the repository root plans the test pipeline without =-s=. An =include:= does not make the included =rule all= the default target, so =rule default= names its inputs.
 
 #+begin_src snakemake :tangle ./Snakefile
 include: "workflows/test.smk"
+
+
+rule default:
+    default_target: True
+    input:
+        rules.all.input,
 #+end_src
 
 ** Fragmentomics sequence processing
@@ -431,7 +449,7 @@ include: "workflows/test.smk"
 #
 # Pure rules only: the module reads no config. The including wrapper must
 # define:
-#   D_INPUTS                 directory holding the raw inputs (FASTQs, reference FASTA)
+#   R_FRAG                   absolute path of the frag repository root (scripts run from R_FRAG/scripts)
 #   D_FRAG                   output root (fastqs/, ref/, bams/, frags/, motifs/, ...)
 #   D_LOGS                   per-rule log directory
 #   D_BENCHMARK              per-rule benchmark directory
@@ -439,7 +457,6 @@ include: "workflows/test.smk"
 #   FRAG_LIBRARY_IDS         library ids to process
 #   FRAG_HEALTHY_LIBRARIES   library ids used as the healthy reference
 #   FRAG_REF_INPUTS          dict ref_name -> path of the reference FASTA (.fa.gz)
-#   frag_ref_names           list of reference names (the keys of FRAG_REF_INPUTS)
 #   FRAG_FASTP_EXTRA         extra fastp arguments (string, may be empty)
 #   FRAG_DELFI_BINS          DELFI 5 Mb bin table (chr start end arm gc map blacklisted_bases)
 #   FRAG_BLKLIST             blacklist BED (.bed or .bed.gz)
@@ -449,6 +466,15 @@ include: "workflows/test.smk"
 #   FRAG_LENGTH_HIST_START   shortest fragment length in the histograms (bp)
 #   FRAG_LENGTH_HIST_END     longest fragment length in the histograms (bp)
 #   FRAG_FPROFILES_K         number of F-profile components
+#
+# The wrapper must also:
+# - provide the raw reads of every library as
+#   {D_FRAG}/fastqs/{library_id}.raw_R1.fastq.gz and .raw_R2.fastq.gz (a rule
+#   or existing files; test.smk symlinks them from the sample sheet);
+# - give CONDA_FRAG as an absolute path or a path relative to this file's
+#   directory (workflows/), which is how Snakemake resolves conda: paths;
+# - use reference names without dots (the {ref_name} wildcard is matched
+#   inside dotted file names).
 #
 #########1#########2#########3#########4#########5#########6#########7#########8
 #+end_src
@@ -470,6 +496,8 @@ rule frag_fastp:
         f"{D_BENCHMARK}/{{library_id}}_frag_fastp.tsv"
     params:
         extra = FRAG_FASTP_EXTRA,
+    resources:
+        concurrency = 50,
     threads:
         8
     output:
@@ -511,6 +539,8 @@ rule frag_bwa_index:
     params:
         out_dir = lambda wc: f"{D_FRAG}/ref/bwa/{wc.ref_name}",
         fasta_target = lambda wc: f"{D_FRAG}/ref/bwa/{wc.ref_name}/{wc.ref_name}.fa",
+    resources:
+        concurrency = 100,
     threads:
         50
     output:
@@ -558,6 +588,8 @@ rule frag_align:
         cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_align.log",
     benchmark:
         f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_align.benchmark.txt"
+    resources:
+        concurrency = 100,
     threads:
         25
     output:
@@ -568,7 +600,7 @@ rule frag_align:
         exec &>> "{log.cmd}"
         echo "[bwa mem] $(date) lib={wildcards.library_id} ref={wildcards.ref_name} threads={threads}"
 
-        bash scripts/bwa_mem_markdup_stream.sh \
+        bash {R_FRAG}/scripts/bwa_mem_markdup_stream.sh \
           "{input.ref}" "{input.r1}" "{input.r2}" \
           "{output.bam}" {threads}
         """
@@ -637,6 +669,8 @@ rule frag_check_ids:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_check_ids.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_check_ids.tsv"
+    resources:
+        concurrency = 10,
     output:
         sentinel = f"{D_FRAG}/ref/{{ref_name}}.ids_verified.ok",
     shell:
@@ -644,7 +678,7 @@ rule frag_check_ids:
         exec &>> "{log.cmd}"
         echo "[check_ids] $(date) ref={wildcards.ref_name}"
 
-        bash scripts/check_ids.sh \
+        bash {R_FRAG}/scripts/check_ids.sh \
           "{input.fasta}" "{input.regions}" "{input.blklist}" "{input.cytoband}" \
           "{output.sentinel}" {input.bams}
         """
@@ -720,6 +754,8 @@ rule frag_read_regions:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_read_regions.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_read_regions.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -729,7 +765,7 @@ rule frag_read_regions:
         exec &>> "{log.cmd}"
         echo "[read_regions] $(date) ref={wildcards.ref_name}"
 
-        bash scripts/frag_read_regions.sh \
+        bash {R_FRAG}/scripts/frag_read_regions.sh \
           "{input.fai}" "{input.blklist}" "{output.bed}"
         """
 #+end_src
@@ -803,6 +839,8 @@ rule frag_filter_alignments:
         cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_filter_alignments.log",
     benchmark:
         f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_filter_alignments.benchmark.txt"
+    resources:
+        concurrency = 25,
     threads:
         4
     output:
@@ -812,7 +850,7 @@ rule frag_filter_alignments:
         exec &>> "{log.cmd}"
         echo "[filter] $(date) lib={wildcards.library_id} ref={wildcards.ref_name} threads={threads}"
 
-        bash scripts/filter_alignments.sh \
+        bash {R_FRAG}/scripts/filter_alignments.sh \
           "{input.bam}" "{input.keep_bed}" {threads} "{output.bam}"
         """
 #+end_src
@@ -885,6 +923,8 @@ rule frag_bam_to_frag_bed:
         cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_bam_to_frag_bed.log",
     benchmark:
         f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_bam_to_frag_bed.benchmark.txt"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -894,7 +934,7 @@ rule frag_bam_to_frag_bed:
         exec &>> "{log.cmd}"
         echo "[bam2bed] $(date) lib={wildcards.library_id} ref={wildcards.ref_name}"
 
-        bash scripts/bam_to_frag_bed.sh \
+        bash {R_FRAG}/scripts/bam_to_frag_bed.sh \
           "{input.bam}" "{input.fasta}" "{output.bed}"
         """
 #+end_src
@@ -972,6 +1012,8 @@ rule frag_delfi_bins:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_delfi_bins.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_delfi_bins.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -981,7 +1023,7 @@ rule frag_delfi_bins:
         exec &>> "{log.cmd}"
         echo "[delfi_bins] $(date) ref={wildcards.ref_name}"
 
-        bash scripts/frag_delfi_bins.sh \
+        bash {R_FRAG}/scripts/frag_delfi_bins.sh \
           "{input.bins}" "{input.fai}" "{output.bed}"
         """
 #+end_src
@@ -1035,6 +1077,8 @@ rule frag_gc_distro:
         cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_gc_distro.log",
     benchmark:
         f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_gc_distro.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -1044,7 +1088,7 @@ rule frag_gc_distro:
         exec &>> "{log.cmd}"
         echo "[gc_distro] $(date) lib={wildcards.library_id} ref={wildcards.ref_name}"
 
-        Rscript scripts/gc_distro.R \
+        Rscript {R_FRAG}/scripts/gc_distro.R \
           "{input.bed}" "{output.csv}"
         """
 #+end_src
@@ -1066,7 +1110,8 @@ packages <- c("tidyverse")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-source("scripts/frag_checks.R")
+script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
 # SECTION: ARGUMENT PARSING
@@ -1128,6 +1173,8 @@ rule frag_healthy_gc:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_healthy_gc.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_healthy_gc.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -1137,7 +1184,7 @@ rule frag_healthy_gc:
         exec &>> "{log.cmd}"
         echo "[healthy_gc] $(date) ref={wildcards.ref_name}"
 
-        Rscript scripts/make_healthy_gc_summary.R \
+        Rscript {R_FRAG}/scripts/make_healthy_gc_summary.R \
           "{input.csvs}" "{output.rds}"
         """
 #+end_src
@@ -1159,7 +1206,8 @@ packages <- c("tidyverse")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-source("scripts/frag_checks.R")
+script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
 # SECTION: ARGUMENT PARSING
@@ -1224,6 +1272,8 @@ rule frag_gc_sample:
         cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_gc_sample.log",
     benchmark:
         f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_gc_sample.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -1233,7 +1283,7 @@ rule frag_gc_sample:
         exec &>> "{log.cmd}"
         echo "[gc_sample] $(date) lib={wildcards.library_id} ref={wildcards.ref_name}"
 
-        Rscript scripts/sample_frags_by_gc.R \
+        Rscript {R_FRAG}/scripts/sample_frags_by_gc.R \
           "{input.healthy_med}" "{input.frag_bed}" "{output.bed}"
         """
 #+end_src
@@ -1258,7 +1308,8 @@ packages <- c("tidyverse")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-source("scripts/frag_checks.R")
+script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
 # SECTION: ARGUMENT PARSING
@@ -1337,6 +1388,8 @@ rule frag_window_sum:
         cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_window_sum.log",
     benchmark:
         f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_window_sum.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -1347,7 +1400,7 @@ rule frag_window_sum:
         exec &>> "{log.cmd}"
         echo "[window_sum] $(date) lib={wildcards.library_id} ref={wildcards.ref_name}"
 
-        bash scripts/frag_window_sum.sh \
+        bash {R_FRAG}/scripts/frag_window_sum.sh \
           "{input.bed}" "{output.short}" "{output.long}"
         """
 #+end_src
@@ -1385,6 +1438,8 @@ rule frag_window_count:
         cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_window_count.log",
     benchmark:
         f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_window_count.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -1395,9 +1450,9 @@ rule frag_window_count:
         exec &>> "{log.cmd}"
         echo "[window_count] $(date) lib={wildcards.library_id} ref={wildcards.ref_name}"
 
-        bash scripts/frag_window_int.sh \
+        bash {R_FRAG}/scripts/frag_window_int.sh \
           "{input.short}" "{input.matbed}" "{output.short}"
-        bash scripts/frag_window_int.sh \
+        bash {R_FRAG}/scripts/frag_window_int.sh \
           "{input.long}" "{input.matbed}" "{output.long}"
         """
 #+end_src
@@ -1437,6 +1492,8 @@ rule frag_count_merge:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_count_merge.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_count_merge.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -1448,7 +1505,7 @@ rule frag_count_merge:
         exec &>> "{log.cmd}"
         echo "[count_merge] $(date) ref={wildcards.ref_name}"
 
-        bash scripts/count_merge.sh \
+        bash {R_FRAG}/scripts/count_merge.sh \
           "{params.counts_dir}" "{output.tsv}"
         """
 #+end_src
@@ -1490,6 +1547,8 @@ rule frag_ratio_normalize:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_ratio_normalize.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_ratio_normalize.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -1499,7 +1558,7 @@ rule frag_ratio_normalize:
         exec &>> "{log.cmd}"
         echo "[ratios] $(date) ref={wildcards.ref_name}"
 
-        Rscript scripts/make_ratios.R \
+        Rscript {R_FRAG}/scripts/make_ratios.R \
           "{input.tsv}" "{output.tsv}"
         """
 #+end_src
@@ -1522,7 +1581,8 @@ packages <- c("tidyverse")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-source("scripts/frag_checks.R")
+script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
 # SECTION: ARGUMENT PARSING
@@ -1597,6 +1657,8 @@ rule frag_end_motifs:
     params:
         max_ends = FRAG_END_MOTIF_MAX_ENDS,
         seed     = FRAG_END_MOTIF_SEED,
+    resources:
+        concurrency = 25,
     threads:
         4
     output:
@@ -1606,7 +1668,7 @@ rule frag_end_motifs:
         exec &>> "{log.cmd}"
         echo "[end_motifs] $(date) lib={wildcards.library_id} ref={wildcards.ref_name} max_ends={params.max_ends}"
 
-        bash scripts/frag_end_motifs.sh \
+        bash {R_FRAG}/scripts/frag_end_motifs.sh \
           "{input.bam}" "{input.fasta}" "{output.tsv}" \
           {threads} {params.max_ends} {params.seed}
         """
@@ -1726,6 +1788,8 @@ rule frag_motif_matrix:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_motif_matrix.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_motif_matrix.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     wildcard_constraints:
@@ -1739,7 +1803,7 @@ rule frag_motif_matrix:
         exec &>> "{log.cmd}"
         echo "[motif_matrix] $(date) ref={wildcards.ref_name}"
 
-        python3 scripts/frag_motif_matrix.py \
+        python3 {R_FRAG}/scripts/frag_motif_matrix.py \
           "{output.counts}" "{output.tsv}" {input.counts}
         """
 #+end_src
@@ -1780,7 +1844,9 @@ def library_id(path):
 
 def read_counts(path):
     """One library's counts over the 256 ACGT motifs, in MOTIFS order."""
-    d = pd.read_csv(path, sep="\t", header=None, names=["motif", "count"], index_col="motif")
+    d = pd.read_csv(
+        path, sep="\t", header=None, names=["motif", "count"], index_col="motif"
+    )
     check_n(d, 257, f"{path} rows")
     counts = d["count"].reindex(MOTIFS)
     if counts.isna().any() or counts.sum() == 0:
@@ -1816,6 +1882,8 @@ rule frag_length_hist:
     params:
         start_bp = FRAG_LENGTH_HIST_START,
         end_bp   = FRAG_LENGTH_HIST_END,
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -1826,7 +1894,7 @@ rule frag_length_hist:
         echo "[length_hist] $(date) lib={wildcards.library_id} ref={wildcards.ref_name}"
 
         mkdir -p "$(dirname {output.tsv})"
-        Rscript scripts/frag_length_hist.R \
+        Rscript {R_FRAG}/scripts/frag_length_hist.R \
           "{input.bed}" "{output.tsv}" {params.start_bp} {params.end_bp}
         """
 #+end_src
@@ -1849,7 +1917,8 @@ packages <- c("data.table")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-source("scripts/frag_checks.R")
+script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
 # SECTION: ARGUMENT PARSING
@@ -1912,6 +1981,8 @@ rule frag_length_freq_matrix:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_length_freq_matrix.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_length_freq_matrix.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -1923,7 +1994,7 @@ rule frag_length_freq_matrix:
         echo "[freq_matrix] $(date) ref={wildcards.ref_name}"
 
         mkdir -p "$(dirname {output.counts})"
-        Rscript scripts/frag_length_freq_matrix.R \
+        Rscript {R_FRAG}/scripts/frag_length_freq_matrix.R \
           "{input.hists}" "{output.counts}" "{output.freqs}"
         """
 #+end_src
@@ -1946,7 +2017,8 @@ packages <- c("tidyverse")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-source("scripts/frag_checks.R")
+script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
 # SECTION: ARGUMENT PARSING
@@ -2021,6 +2093,8 @@ rule frag_arm_zscores:
         f"{D_BENCHMARK}/{{ref_name}}_frag_arm_zscores.tsv"
     params:
         healthy_libs = " ".join(FRAG_HEALTHY_LIBRARIES),
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -2035,7 +2109,7 @@ rule frag_arm_zscores:
         healthy_file=$(mktemp)
         for lib in {params.healthy_libs}; do echo "$lib" >> "$healthy_file"; done
 
-        Rscript scripts/delfi_arm_zscores.R \
+        Rscript {R_FRAG}/scripts/delfi_arm_zscores.R \
           "{input.counts}" "{input.cytoband}" "$healthy_file" "{output.csv}"
 
         rm -f "$healthy_file"
@@ -2063,7 +2137,8 @@ packages <- c("tidyverse", "data.table")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-source("scripts/frag_checks.R")
+script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
 # SECTION: ARGUMENT PARSING
@@ -2234,6 +2309,8 @@ rule frag_ratio_row_normalize:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_ratio_row_normalize.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_ratio_row_normalize.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -2244,7 +2321,7 @@ rule frag_ratio_row_normalize:
         echo "[ratio_row_norm] $(date) ref={wildcards.ref_name}"
 
         mkdir -p "$(dirname {output.csv})"
-        Rscript scripts/ratio_row_normalize.R \
+        Rscript {R_FRAG}/scripts/ratio_row_normalize.R \
           "{input.tsv}" "{output.csv}"
         """
 #+end_src
@@ -2267,7 +2344,8 @@ packages <- c("tidyverse")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-source("scripts/frag_checks.R")
+script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
 # SECTION: ARGUMENT PARSING
@@ -2332,6 +2410,8 @@ rule frag_plot_length_overlay:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_plot_length_overlay.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_plot_length_overlay.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -2342,7 +2422,7 @@ rule frag_plot_length_overlay:
         echo "[plot_length_overlay] $(date) ref={wildcards.ref_name}"
 
         mkdir -p "$(dirname {output.pdf})"
-        Rscript scripts/plot_frag_length_overlay.R \
+        Rscript {R_FRAG}/scripts/plot_frag_length_overlay.R \
           "{input.freq}" "{output.pdf}"
         """
 #+end_src
@@ -2365,7 +2445,8 @@ packages <- c("tidyverse")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-source("scripts/frag_checks.R")
+script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
 # SECTION: ARGUMENT PARSING
@@ -2471,6 +2552,8 @@ rule frag_plot_ratio_profile:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_plot_ratio_profile.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_plot_ratio_profile.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -2481,7 +2564,7 @@ rule frag_plot_ratio_profile:
         echo "[plot_ratio_profile] $(date) ref={wildcards.ref_name}"
 
         mkdir -p "$(dirname {output.pdf})"
-        Rscript scripts/plot_ratio_profile.R \
+        Rscript {R_FRAG}/scripts/plot_ratio_profile.R \
           "{input.tsv}" "{output.pdf}"
         """
 #+end_src
@@ -2503,7 +2586,8 @@ packages <- c("tidyverse")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-source("scripts/frag_checks.R")
+script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
 # SECTION: ARGUMENT PARSING
@@ -2616,6 +2700,8 @@ rule frag_plot_arm_zscore_heatmap:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_plot_arm_zscore_heatmap.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_plot_arm_zscore_heatmap.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -2626,7 +2712,7 @@ rule frag_plot_arm_zscore_heatmap:
         echo "[plot_arm_zscore_heatmap] $(date) ref={wildcards.ref_name}"
 
         mkdir -p "$(dirname {output.pdf})"
-        Rscript scripts/plot_arm_zscore_heatmap.R \
+        Rscript {R_FRAG}/scripts/plot_arm_zscore_heatmap.R \
           "{input.csv}" "{output.pdf}"
         """
 #+end_src
@@ -2649,7 +2735,8 @@ packages <- c("tidyverse")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-source("scripts/frag_checks.R")
+script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
 # SECTION: ARGUMENT PARSING
@@ -2774,6 +2861,8 @@ rule frag_nmf_length_features:
         cmd = f"{D_LOGS}/{{ref_name}}_nmf_{{n_components}}_frag_nmf_length_features.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_nmf_{{n_components}}_frag_nmf_length_features.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -2785,7 +2874,7 @@ rule frag_nmf_length_features:
         echo "[nmf_length] $(date) ref={wildcards.ref_name} k={wildcards.n_components}"
 
         mkdir -p "$(dirname {output.w})"
-        python3 scripts/frag_nmf_length_features.py \
+        python3 {R_FRAG}/scripts/frag_nmf_length_features.py \
           "{input.freq}" {wildcards.n_components} "{output.w}" "{output.h}"
         """
 #+end_src
@@ -2857,6 +2946,8 @@ rule frag_motif_diversity:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_motif_diversity.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_motif_diversity.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -2867,7 +2958,7 @@ rule frag_motif_diversity:
         echo "[motif_diversity] $(date) ref={wildcards.ref_name}"
 
         mkdir -p "$(dirname {output.csv})"
-        Rscript scripts/frag_motif_diversity.R \
+        Rscript {R_FRAG}/scripts/frag_motif_diversity.R \
           "{input.tsv}" "{output.csv}"
         """
 #+end_src
@@ -2889,7 +2980,8 @@ packages <- c("data.table")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-source("scripts/frag_checks.R")
+script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
 # SECTION: ARGUMENT PARSING
@@ -2950,6 +3042,8 @@ rule frag_fprofiles:
         f"{D_BENCHMARK}/{{ref_name}}_frag_fprofiles.tsv"
     params:
         n_components = FRAG_FPROFILES_K,
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -2961,7 +3055,7 @@ rule frag_fprofiles:
         echo "[fprofiles] $(date) ref={wildcards.ref_name} k={params.n_components}"
 
         mkdir -p "$(dirname {output.fprof})"
-        python3 scripts/frag_fprofiles.py \
+        python3 {R_FRAG}/scripts/frag_fprofiles.py \
           "{input.tsv}" {params.n_components} "{output.fprof}" "{output.motif_per_fprof}"
         """
 #+end_src
@@ -3031,7 +3125,9 @@ Data-integrity helpers for the analysis scripts (=log_n=, =check_n=, =check_none
 #+begin_src R :tangle ./scripts/frag_checks.R
 #!/usr/bin/env Rscript
 ## frag_checks.R — data-integrity helpers for frag analysis scripts.
-## Source with: source("scripts/frag_checks.R")
+## Source from a script in the same directory:
+##   script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+##   source(file.path(script_dir, "frag_checks.R"))
 
 ## Log row count to stderr; return x invisibly for piping.
 log_n <- function(x, label = "rows") {
@@ -3063,8 +3159,8 @@ assert_cols <- function(x, cols, label = "object") {
 #!/usr/bin/env python3
 """frag_checks.py — data-integrity helpers for frag analysis scripts.
 
-Import with a sibling-path shim (rules run scripts as `python3 scripts/<x>.py`
-from the repo root):
+Import with a sibling-path shim (rules run scripts as
+`python3 {R_FRAG}/scripts/<x>.py`):
 
     import os, sys
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -3258,7 +3354,10 @@ def blacklisted_bases(blacklist, bed_path, tmpdir):
     blk_path = f"{tmpdir}/blacklist.bed"
     blk.sort_values([0, 1]).to_csv(blk_path, sep="\t", header=False, index=False)
     merged = subprocess.run(
-        ["bedtools", "merge", "-i", blk_path], check=True, capture_output=True, text=True
+        ["bedtools", "merge", "-i", blk_path],
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout
     merged_path = f"{tmpdir}/blacklist.merged.bed"
     with open(merged_path, "w") as fh:
@@ -3277,7 +3376,9 @@ def arms(cytoband, bins):
     """p when the bin midpoint lies before the end of the chromosome's last p band."""
     cyto = pd.read_csv(cytoband, sep="\t", header=None, usecols=[0, 1, 2, 3])
     cyto.columns = ["chr", "start", "end", "band"]
-    p_end = cyto[cyto["band"].astype(str).str.startswith("p")].groupby("chr")["end"].max()
+    p_end = (
+        cyto[cyto["band"].astype(str).str.startswith("p")].groupby("chr")["end"].max()
+    )
     mid = (bins["start"] + bins["end"]) / 2
     arm = [
         chrom[3:] + ("p" if m < p_end.get(chrom, 0) else "q")
@@ -3467,6 +3568,8 @@ main "$@"
 
 *** Test configuration
 #+begin_src yaml :tangle ./config/test.yaml
+available-concurrency: 100
+repo-dir: .
 
 conda:
   frag: "../envs/frag-conda-env.yaml"
@@ -3558,10 +3661,17 @@ def check_config(cfg, schema_path):
 # workflow.current_basedir is this file's directory, whichever Snakefile included it.
 check_config(config, os.path.join(workflow.current_basedir, "..", "config", "config.schema.yaml"))
 
+# Concurrency budget: each rule declares a cost (resources: concurrency=N);
+# the budget comes from available-concurrency unless --resources concurrency=N
+# is given on the command line.
+if "concurrency" not in workflow.global_resources:
+    workflow.global_resources["concurrency"] = int(config["available-concurrency"])
+
 # ------------------------------------------------------------------------------
 # Constants
 # ------------------------------------------------------------------------------
 
+R_FRAG      = os.path.abspath(config["repo-dir"])
 D_INPUTS    = config["directories"]["inputs"]
 D_FRAG      = config["directories"]["frag"]
 D_LOGS      = config["directories"]["logs"]
@@ -3581,7 +3691,7 @@ FRAG_REF_INPUTS         = {name: f"{D_INPUTS}/{a['input']}" for name, a in confi
 FRAG_DELFI_BINS         = config["delfi_bins"]
 FRAG_BLKLIST            = config["blklist"]
 FRAG_CYTOBAND           = config["cytoband"]
-FRAG_END_MOTIF_MAX_ENDS = config.get("end_motif", {}).get("max_ends") or 0   # null in YAML -> 0 = every end
+FRAG_END_MOTIF_MAX_ENDS = int(config.get("end_motif", {}).get("max_ends") or 0)   # null in YAML -> 0 = every end; 1e7 or 10000000.0 -> 10000000
 FRAG_END_MOTIF_SEED     = config.get("end_motif", {}).get("seed", 42)
 FRAG_LENGTH_HIST_START  = config.get("length_hist", {}).get("start", 30)
 FRAG_LENGTH_HIST_END    = config.get("length_hist", {}).get("end", 700)
@@ -3620,6 +3730,10 @@ samples = SampleTable(
 )
 
 FRAG_LIBRARY_IDS = samples.frag_library_ids
+
+_not_selected = sorted(set(FRAG_HEALTHY_LIBRARIES) - set(FRAG_LIBRARY_IDS))
+if _not_selected:
+    raise ValueError(f"healthy_libraries not among the selected library ids {FRAG_LIBRARY_IDS}: {_not_selected}")
 
 # ------------------------------------------------------------------------------
 # Rule all
@@ -3790,6 +3904,8 @@ rule symlink_input_fastqs:
     output:
         r1 = f"{D_FRAG}/fastqs/{{library_id}}.raw_R1.fastq.gz",
         r2 = f"{D_FRAG}/fastqs/{{library_id}}.raw_R2.fastq.gz",
+    resources:
+        concurrency = 1,
     params:
         out_dir = f"{D_FRAG}/fastqs",
     shell:
@@ -3825,6 +3941,7 @@ A 400 bp synthetic contig and a hand-written SAM give exact expected counts.
 The expected motifs are computed here by slicing the contig directly, which
 is independent of the script's samtools/bedtools route.
 """
+
 import random
 import shutil
 import subprocess
@@ -3883,16 +4000,28 @@ def pair(name, f1, p1, f2, p2, mapq=60, cigar1="30M"):
 CASES = {
     "r1_plus": (pair("r1_plus", 99, 11, 147, 151), [plus_motif(11), minus_motif(151)]),
     # Read 1 on the minus strand: the case read-number keying gets wrong.
-    "r1_minus": (pair("r1_minus", 83, 201, 163, 61), [minus_motif(201), plus_motif(61)]),
+    "r1_minus": (
+        pair("r1_minus", 83, 201, 163, 61),
+        [minus_motif(201), plus_motif(61)],
+    ),
     "duplicate": (pair("dup", 99 + 1024, 21, 147 + 1024, 121), []),
     "secondary": ([rec("sec", 99 + 256, 31, pnext=131)], []),
     "supplementary": ([rec("supp", 99 + 2048, 41, pnext=141)], []),
-    "mate_unmapped": ([rec("mu", 73, 51, pnext=51), rec("mu", 133, 51, mapq=0, cigar="*", pnext=51)], []),
+    "mate_unmapped": (
+        [rec("mu", 73, 51, pnext=51), rec("mu", 133, 51, mapq=0, cigar="*", pnext=51)],
+        [],
+    ),
     "mapq29": (pair("lowq", 99, 71, 147, 171, mapq=29), []),
     # QC-fail (0x200) reads are kept, as in the reference implementation.
-    "qcfail": (pair("qcf", 99 + 512, 131, 147 + 512, 260), [plus_motif(131), minus_motif(260)]),
+    "qcfail": (
+        pair("qcf", 99 + 512, 131, 147 + 512, 260),
+        [plus_motif(131), minus_motif(260)],
+    ),
     # Soft clip: the end is the first aligned base, not the clipped read start.
-    "softclip": (pair("sc", 99, 101, 147, 250, cigar1="5S25M"), [plus_motif(101), minus_motif(250)]),
+    "softclip": (
+        pair("sc", 99, 101, 147, 250, cigar1="5S25M"),
+        [plus_motif(101), minus_motif(250)],
+    ),
     "n_end": (pair("nend", 99, 301, 147, 351), ["OTHER", minus_motif(351)]),
 }
 
@@ -3902,7 +4031,9 @@ def write_fixture(tmp_path, sam_lines):
     fa.write_text(">chrT\n" + REF + "\n")
     subprocess.run(["samtools", "faidx", str(fa)], check=True)
     sam = tmp_path / "in.sam"
-    sam.write_text("@HD\tVN:1.6\tSO:unsorted\n@SQ\tSN:chrT\tLN:400\n" + "\n".join(sam_lines) + "\n")
+    sam.write_text(
+        "@HD\tVN:1.6\tSO:unsorted\n@SQ\tSN:chrT\tLN:400\n" + "\n".join(sam_lines) + "\n"
+    )
     bam = tmp_path / "in.bam"
     subprocess.run(["samtools", "sort", "-o", str(bam), str(sam)], check=True)
     subprocess.run(["samtools", "index", str(bam)], check=True)
@@ -3912,7 +4043,16 @@ def write_fixture(tmp_path, sam_lines):
 def run_script(tmp_path, bam, fa, max_ends=0, seed=42, name="out.tsv"):
     out = tmp_path / name
     subprocess.run(
-        ["bash", str(SCRIPT), str(bam), str(fa), str(out), "1", str(max_ends), str(seed)],
+        [
+            "bash",
+            str(SCRIPT),
+            str(bam),
+            str(fa),
+            str(out),
+            "1",
+            str(max_ends),
+            str(seed),
+        ],
         check=True,
     )
     rows = [line.split("\t") for line in out.read_text().splitlines()]
@@ -3950,7 +4090,9 @@ def test_read1_minus_takes_fragment_5prime_end(tmp_path):
     _, got = run_script(tmp_path, bam, fa)
     true_ends = Counter([minus_motif(201), plus_motif(61)])
     interior = {REF[200:204], revcomp(REF[86:90])}
-    assert not interior & set(true_ends), "fixture seed makes an interior motif equal a true end"
+    assert not interior & set(
+        true_ends
+    ), "fixture seed makes an interior motif equal a true end"
     assert {m: c for m, c in got.items() if c} == dict(true_ends)
     assert all(got[m] == 0 for m in interior)
 
@@ -3980,8 +4122,18 @@ def test_max_ends_none_counts_all(tmp_path):
 def test_max_ends_non_integer_fails(tmp_path):
     bam, fa = write_fixture(tmp_path, many_pairs(10))
     res = subprocess.run(
-        ["bash", str(SCRIPT), str(bam), str(fa), str(tmp_path / "x.tsv"), "1", "ten", "42"],
-        capture_output=True, text=True,
+        [
+            "bash",
+            str(SCRIPT),
+            str(bam),
+            str(fa),
+            str(tmp_path / "x.tsv"),
+            "1",
+            "ten",
+            "42",
+        ],
+        capture_output=True,
+        text=True,
     )
     assert res.returncode != 0
     assert "max_ends must be" in res.stderr
@@ -4006,6 +4158,7 @@ def test_subsample_keeps_mates_together_and_is_seeded(tmp_path):
 
 #+begin_src python :tangle ./tests/unit/test_motif_matrix.py :mkdirp yes
 """Tests for scripts/frag_motif_matrix.py: layout, orientation, values."""
+
 import subprocess
 import sys
 from itertools import product
@@ -4070,8 +4223,15 @@ def test_library_with_no_ends_fails(tmp_path):
     p = tmp_path / "empty.chrT.motif_counts.tsv"
     write_counts(p, {}, other=3)
     res = subprocess.run(
-        [sys.executable, str(SCRIPT), str(tmp_path / "c.tsv"), str(tmp_path / "f.tsv"), str(p)],
-        capture_output=True, text=True,
+        [
+            sys.executable,
+            str(SCRIPT),
+            str(tmp_path / "c.tsv"),
+            str(tmp_path / "f.tsv"),
+            str(p),
+        ],
+        capture_output=True,
+        text=True,
     )
     assert res.returncode != 0
     assert "empty" in res.stderr
@@ -4080,28 +4240,55 @@ def test_library_with_no_ends_fails(tmp_path):
 The module contract test checks that every wrapper-bound name =workflows/frag.smk= uses is listed in its preamble comment, so a wrapper written from that list alone defines everything the module needs.
 
 #+begin_src python :tangle ./tests/unit/test_module_contract.py :mkdirp yes
-"""workflows/frag.smk lists in its preamble every wrapper variable it uses."""
+"""workflows/frag.smk: the preamble lists exactly the wrapper variables the
+module uses, and every script runs through the repository root R_FRAG, so the
+module works when included from another directory."""
+
 import re
 from pathlib import Path
 
-SMK = Path(__file__).resolve().parents[2] / "workflows" / "frag.smk"
-NAME = re.compile(r"\b(D_[A-Z_]+|FRAG_[A-Z_]+|CONDA_[A-Z_]+|NMF_[A-Z_]+|frag_ref_names)\b")
+REPO = Path(__file__).resolve().parents[2]
+SMK = REPO / "workflows" / "frag.smk"
+NAME = re.compile(
+    r"\b(R_[A-Z_]+|D_[A-Z_]+|FRAG_[A-Z_]+|CONDA_[A-Z_]+|NMF_[A-Z_]+|frag_ref_names)\b"
+)
+LINES = SMK.read_text().splitlines()
+HEADER = "\n".join(l for l in LINES if l.startswith("#"))
+BODY = "\n".join(l for l in LINES if not l.lstrip().startswith("#"))
+LISTED = set(re.findall(r"^#\s+([A-Za-z_]+)\s{2,}", HEADER, flags=re.M))
 
 
 def test_preamble_lists_every_wrapper_variable():
-    lines = SMK.read_text().splitlines()
-    header = "\n".join(l for l in lines if l.startswith("#"))
-    body = "\n".join(l for l in lines if not l.lstrip().startswith("#"))
-    used = set(NAME.findall(body))
-    listed = set(re.findall(r"^#\s+(\w+)\s", header, flags=re.M))
+    used = set(NAME.findall(BODY))
     assert used, "no wrapper variables found"
-    assert sorted(used - listed) == []
+    assert sorted(used - LISTED) == []
+
+
+def test_preamble_lists_no_unused_variable():
+    used = set(NAME.findall(BODY))
+    assert sorted(LISTED - used) == []
+
+
+def test_scripts_run_through_repo_root():
+    calls = re.findall(r"\b(?:bash|Rscript|python3?)\s+(\S*scripts/\S+)", BODY)
+    assert calls, "no script calls found"
+    assert [c for c in calls if not c.startswith("{R_FRAG}/scripts/")] == []
+
+
+def test_r_scripts_source_helpers_from_their_own_directory():
+    bad = [
+        p.name
+        for p in (REPO / "scripts").glob("*.R")
+        if 'source("scripts/' in p.read_text()
+    ]
+    assert bad == []
 #+end_src
 
 The read-regions test gives =scripts/frag_read_regions.sh= a two-contig index (=chr1=, =chrX=) and a blacklist with one =chr1= interval and one =chrX= interval, and asserts the output is exactly =chr1= minus that interval: =chrX= is not an autosome, and only the blacklisted bases are removed.
 
 #+begin_src python :tangle ./tests/unit/test_read_regions.py :mkdirp yes
 """Known-answer test for scripts/frag_read_regions.sh."""
+
 import shutil
 import subprocess
 from pathlib import Path
@@ -4145,6 +4332,7 @@ The DELFI-bins test gives =scripts/frag_delfi_bins.sh= a bin table with three =c
 
 #+begin_src python :tangle ./tests/unit/test_delfi_bins.py :mkdirp yes
 """Known-answer test for scripts/frag_delfi_bins.sh."""
+
 import subprocess
 from pathlib import Path
 
@@ -4277,6 +4465,9 @@ snakemake -s workflows/cfdna-test.smk --configfile config/cfdna-test.yaml --use-
 #+end_example
 
 #+begin_src yaml :tangle ./config/cfdna-test.yaml
+available-concurrency: 6400
+repo-dir: ${HOME}/repos/frag
+
 conda:
   frag: "${HOME}/repos/frag/envs/frag-conda-env.yaml"
 
@@ -4359,10 +4550,17 @@ def check_config(cfg, schema_path):
 # workflow.current_basedir is this file's directory, whichever Snakefile included it.
 check_config(config, os.path.join(workflow.current_basedir, "..", "config", "config.schema.yaml"))
 
+# Concurrency budget: each rule declares a cost (resources: concurrency=N);
+# the budget comes from available-concurrency unless --resources concurrency=N
+# is given on the command line.
+if "concurrency" not in workflow.global_resources:
+    workflow.global_resources["concurrency"] = int(config["available-concurrency"])
+
 # ------------------------------------------------------------------------------
 # Constants
 # ------------------------------------------------------------------------------
 
+R_FRAG      = os.path.abspath(config["repo-dir"])
 D_INPUTS    = config["directories"]["inputs"]
 D_FRAG      = config["directories"]["frag"]
 D_LOGS      = config["directories"]["logs"]
@@ -4382,7 +4580,7 @@ FRAG_REF_INPUTS         = {name: f"{D_INPUTS}/{a['input']}" for name, a in confi
 FRAG_DELFI_BINS         = config["delfi_bins"]
 FRAG_BLKLIST            = config["blklist"]
 FRAG_CYTOBAND           = config["cytoband"]
-FRAG_END_MOTIF_MAX_ENDS = config.get("end_motif", {}).get("max_ends") or 0   # null in YAML -> 0 = every end
+FRAG_END_MOTIF_MAX_ENDS = int(config.get("end_motif", {}).get("max_ends") or 0)   # null in YAML -> 0 = every end; 1e7 or 10000000.0 -> 10000000
 FRAG_END_MOTIF_SEED     = config.get("end_motif", {}).get("seed", 42)
 FRAG_LENGTH_HIST_START  = config.get("length_hist", {}).get("start", 30)
 FRAG_LENGTH_HIST_END    = config.get("length_hist", {}).get("end", 700)
@@ -4421,6 +4619,10 @@ samples = SampleTable(
 )
 
 FRAG_LIBRARY_IDS = samples.frag_library_ids
+
+_not_selected = sorted(set(FRAG_HEALTHY_LIBRARIES) - set(FRAG_LIBRARY_IDS))
+if _not_selected:
+    raise ValueError(f"healthy_libraries not among the selected library ids {FRAG_LIBRARY_IDS}: {_not_selected}")
 
 # ------------------------------------------------------------------------------
 # Rule all
@@ -4591,6 +4793,8 @@ rule symlink_input_fastqs:
     output:
         r1 = f"{D_FRAG}/fastqs/{{library_id}}.raw_R1.fastq.gz",
         r2 = f"{D_FRAG}/fastqs/{{library_id}}.raw_R2.fastq.gz",
+    resources:
+        concurrency = 1,
     params:
         out_dir = f"{D_FRAG}/fastqs",
     shell:

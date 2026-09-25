@@ -1,4 +1,7 @@
 # frag configuration template. Replace every /path/to value; paths expand ${HOME}.
+available-concurrency: 100
+repo-dir: ${HOME}/repos/frag
+
 conda:
   frag: "../envs/frag-conda-env.yaml"
 

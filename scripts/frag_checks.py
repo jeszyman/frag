@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """frag_checks.py — data-integrity helpers for frag analysis scripts.
 
-Import with a sibling-path shim (rules run scripts as `python3 scripts/<x>.py`
-from the repo root):
+Import with a sibling-path shim (rules run scripts as
+`python3 {R_FRAG}/scripts/<x>.py`):
 
     import os, sys
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

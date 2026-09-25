@@ -1,8 +1,15 @@
 $schema: "https://json-schema.org/draft/2020-12/schema"
 title: frag wrapper configuration (workflows/test.smk, workflows/cfdna-test.smk)
 type: object
-required: [conda, directories, sample-tsv-path, frag_ref_assemblies, delfi_bins, blklist, cytoband]
+required: [available-concurrency, repo-dir, conda, directories, sample-tsv-path, frag_ref_assemblies, delfi_bins, blklist, cytoband, healthy_libraries]
 properties:
+  available-concurrency:
+    type: integer
+    minimum: 1
+    description: "concurrency budget; each rule declares a cost (alignment 100, light rules 10); --resources concurrency=N overrides"
+  repo-dir:
+    type: string
+    description: "frag repository root (scripts run from repo-dir/scripts), relative to the run directory or absolute"
   conda:
     type: object
     required: [frag]
@@ -24,7 +31,8 @@ properties:
   frag_ref_assemblies:
     type: object
     minProperties: 1
-    description: "reference name -> assembly; the name is the {ref_name} wildcard and must not contain a dot"
+    maxProperties: 1
+    description: "reference name -> assembly; exactly one (the read regions, DELFI bins and counts directory are per run); the name is the {ref_name} wildcard and must not contain a dot"
     propertyNames: {pattern: "^[^.]+$"}
     additionalProperties:
       type: object
@@ -39,6 +47,7 @@ properties:
   cytoband: {type: string, description: UCSC cytoBand table for chromosome arms}
   healthy_libraries:
     type: array
+    minItems: 1
     items: {type: string}
     description: library ids used as the healthy reference (GC summary, arm z-scores)
   fastp:

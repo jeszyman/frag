@@ -49,10 +49,17 @@ def check_config(cfg, schema_path):
 # workflow.current_basedir is this file's directory, whichever Snakefile included it.
 check_config(config, os.path.join(workflow.current_basedir, "..", "config", "config.schema.yaml"))
 
+# Concurrency budget: each rule declares a cost (resources: concurrency=N);
+# the budget comes from available-concurrency unless --resources concurrency=N
+# is given on the command line.
+if "concurrency" not in workflow.global_resources:
+    workflow.global_resources["concurrency"] = int(config["available-concurrency"])
+
 # ------------------------------------------------------------------------------
 # Constants
 # ------------------------------------------------------------------------------
 
+R_FRAG      = os.path.abspath(config["repo-dir"])
 D_INPUTS    = config["directories"]["inputs"]
 D_FRAG      = config["directories"]["frag"]
 D_LOGS      = config["directories"]["logs"]
@@ -72,7 +79,7 @@ FRAG_REF_INPUTS         = {name: f"{D_INPUTS}/{a['input']}" for name, a in confi
 FRAG_DELFI_BINS         = config["delfi_bins"]
 FRAG_BLKLIST            = config["blklist"]
 FRAG_CYTOBAND           = config["cytoband"]
-FRAG_END_MOTIF_MAX_ENDS = config.get("end_motif", {}).get("max_ends") or 0   # null in YAML -> 0 = every end
+FRAG_END_MOTIF_MAX_ENDS = int(config.get("end_motif", {}).get("max_ends") or 0)   # null in YAML -> 0 = every end; 1e7 or 10000000.0 -> 10000000
 FRAG_END_MOTIF_SEED     = config.get("end_motif", {}).get("seed", 42)
 FRAG_LENGTH_HIST_START  = config.get("length_hist", {}).get("start", 30)
 FRAG_LENGTH_HIST_END    = config.get("length_hist", {}).get("end", 700)
@@ -111,6 +118,10 @@ samples = SampleTable(
 )
 
 FRAG_LIBRARY_IDS = samples.frag_library_ids
+
+_not_selected = sorted(set(FRAG_HEALTHY_LIBRARIES) - set(FRAG_LIBRARY_IDS))
+if _not_selected:
+    raise ValueError(f"healthy_libraries not among the selected library ids {FRAG_LIBRARY_IDS}: {_not_selected}")
 
 # ------------------------------------------------------------------------------
 # Rule all
@@ -281,6 +292,8 @@ rule symlink_input_fastqs:
     output:
         r1 = f"{D_FRAG}/fastqs/{{library_id}}.raw_R1.fastq.gz",
         r2 = f"{D_FRAG}/fastqs/{{library_id}}.raw_R2.fastq.gz",
+    resources:
+        concurrency = 1,
     params:
         out_dir = f"{D_FRAG}/fastqs",
     shell:

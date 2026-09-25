@@ -14,7 +14,8 @@ packages <- c("tidyverse")
 suppressPackageStartupMessages(
   invisible(lapply(packages, require, character.only = TRUE))
 )
-source("scripts/frag_checks.R")
+script_dir <- dirname(normalizePath(sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))))
+source(file.path(script_dir, "frag_checks.R"))
 
 # =============================================================================
 # SECTION: ARGUMENT PARSING

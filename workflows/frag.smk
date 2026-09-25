@@ -6,7 +6,7 @@
 #
 # Pure rules only: the module reads no config. The including wrapper must
 # define:
-#   D_INPUTS                 directory holding the raw inputs (FASTQs, reference FASTA)
+#   R_FRAG                   absolute path of the frag repository root (scripts run from R_FRAG/scripts)
 #   D_FRAG                   output root (fastqs/, ref/, bams/, frags/, motifs/, ...)
 #   D_LOGS                   per-rule log directory
 #   D_BENCHMARK              per-rule benchmark directory
@@ -14,7 +14,6 @@
 #   FRAG_LIBRARY_IDS         library ids to process
 #   FRAG_HEALTHY_LIBRARIES   library ids used as the healthy reference
 #   FRAG_REF_INPUTS          dict ref_name -> path of the reference FASTA (.fa.gz)
-#   frag_ref_names           list of reference names (the keys of FRAG_REF_INPUTS)
 #   FRAG_FASTP_EXTRA         extra fastp arguments (string, may be empty)
 #   FRAG_DELFI_BINS          DELFI 5 Mb bin table (chr start end arm gc map blacklisted_bases)
 #   FRAG_BLKLIST             blacklist BED (.bed or .bed.gz)
@@ -24,6 +23,15 @@
 #   FRAG_LENGTH_HIST_START   shortest fragment length in the histograms (bp)
 #   FRAG_LENGTH_HIST_END     longest fragment length in the histograms (bp)
 #   FRAG_FPROFILES_K         number of F-profile components
+#
+# The wrapper must also:
+# - provide the raw reads of every library as
+#   {D_FRAG}/fastqs/{library_id}.raw_R1.fastq.gz and .raw_R2.fastq.gz (a rule
+#   or existing files; test.smk symlinks them from the sample sheet);
+# - give CONDA_FRAG as an absolute path or a path relative to this file's
+#   directory (workflows/), which is how Snakemake resolves conda: paths;
+# - use reference names without dots (the {ref_name} wildcard is matched
+#   inside dotted file names).
 #
 #########1#########2#########3#########4#########5#########6#########7#########8
 rule frag_fastp:
@@ -40,6 +48,8 @@ rule frag_fastp:
         f"{D_BENCHMARK}/{{library_id}}_frag_fastp.tsv"
     params:
         extra = FRAG_FASTP_EXTRA,
+    resources:
+        concurrency = 50,
     threads:
         8
     output:
@@ -77,6 +87,8 @@ rule frag_bwa_index:
     params:
         out_dir = lambda wc: f"{D_FRAG}/ref/bwa/{wc.ref_name}",
         fasta_target = lambda wc: f"{D_FRAG}/ref/bwa/{wc.ref_name}/{wc.ref_name}.fa",
+    resources:
+        concurrency = 100,
     threads:
         50
     output:
@@ -118,6 +130,8 @@ rule frag_align:
         cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_align.log",
     benchmark:
         f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_align.benchmark.txt"
+    resources:
+        concurrency = 100,
     threads:
         25
     output:
@@ -128,7 +142,7 @@ rule frag_align:
         exec &>> "{log.cmd}"
         echo "[bwa mem] $(date) lib={wildcards.library_id} ref={wildcards.ref_name} threads={threads}"
 
-        bash scripts/bwa_mem_markdup_stream.sh \
+        bash {R_FRAG}/scripts/bwa_mem_markdup_stream.sh \
           "{input.ref}" "{input.r1}" "{input.r2}" \
           "{output.bam}" {threads}
         """
@@ -150,6 +164,8 @@ rule frag_check_ids:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_check_ids.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_check_ids.tsv"
+    resources:
+        concurrency = 10,
     output:
         sentinel = f"{D_FRAG}/ref/{{ref_name}}.ids_verified.ok",
     shell:
@@ -157,7 +173,7 @@ rule frag_check_ids:
         exec &>> "{log.cmd}"
         echo "[check_ids] $(date) ref={wildcards.ref_name}"
 
-        bash scripts/check_ids.sh \
+        bash {R_FRAG}/scripts/check_ids.sh \
           "{input.fasta}" "{input.regions}" "{input.blklist}" "{input.cytoband}" \
           "{output.sentinel}" {input.bams}
         """
@@ -174,6 +190,8 @@ rule frag_read_regions:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_read_regions.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_read_regions.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -183,7 +201,7 @@ rule frag_read_regions:
         exec &>> "{log.cmd}"
         echo "[read_regions] $(date) ref={wildcards.ref_name}"
 
-        bash scripts/frag_read_regions.sh \
+        bash {R_FRAG}/scripts/frag_read_regions.sh \
           "{input.fai}" "{input.blklist}" "{output.bed}"
         """
 rule frag_filter_alignments:
@@ -199,6 +217,8 @@ rule frag_filter_alignments:
         cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_filter_alignments.log",
     benchmark:
         f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_filter_alignments.benchmark.txt"
+    resources:
+        concurrency = 25,
     threads:
         4
     output:
@@ -208,7 +228,7 @@ rule frag_filter_alignments:
         exec &>> "{log.cmd}"
         echo "[filter] $(date) lib={wildcards.library_id} ref={wildcards.ref_name} threads={threads}"
 
-        bash scripts/filter_alignments.sh \
+        bash {R_FRAG}/scripts/filter_alignments.sh \
           "{input.bam}" "{input.keep_bed}" {threads} "{output.bam}"
         """
 rule frag_bam_to_frag_bed:
@@ -223,6 +243,8 @@ rule frag_bam_to_frag_bed:
         cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_bam_to_frag_bed.log",
     benchmark:
         f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_bam_to_frag_bed.benchmark.txt"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -232,7 +254,7 @@ rule frag_bam_to_frag_bed:
         exec &>> "{log.cmd}"
         echo "[bam2bed] $(date) lib={wildcards.library_id} ref={wildcards.ref_name}"
 
-        bash scripts/bam_to_frag_bed.sh \
+        bash {R_FRAG}/scripts/bam_to_frag_bed.sh \
           "{input.bam}" "{input.fasta}" "{output.bed}"
         """
 rule frag_delfi_bins:
@@ -248,6 +270,8 @@ rule frag_delfi_bins:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_delfi_bins.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_delfi_bins.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -257,7 +281,7 @@ rule frag_delfi_bins:
         exec &>> "{log.cmd}"
         echo "[delfi_bins] $(date) ref={wildcards.ref_name}"
 
-        bash scripts/frag_delfi_bins.sh \
+        bash {R_FRAG}/scripts/frag_delfi_bins.sh \
           "{input.bins}" "{input.fai}" "{output.bed}"
         """
 rule frag_gc_distro:
@@ -271,6 +295,8 @@ rule frag_gc_distro:
         cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_gc_distro.log",
     benchmark:
         f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_gc_distro.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -280,7 +306,7 @@ rule frag_gc_distro:
         exec &>> "{log.cmd}"
         echo "[gc_distro] $(date) lib={wildcards.library_id} ref={wildcards.ref_name}"
 
-        Rscript scripts/gc_distro.R \
+        Rscript {R_FRAG}/scripts/gc_distro.R \
           "{input.bed}" "{output.csv}"
         """
 rule frag_healthy_gc:
@@ -298,6 +324,8 @@ rule frag_healthy_gc:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_healthy_gc.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_healthy_gc.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -307,7 +335,7 @@ rule frag_healthy_gc:
         exec &>> "{log.cmd}"
         echo "[healthy_gc] $(date) ref={wildcards.ref_name}"
 
-        Rscript scripts/make_healthy_gc_summary.R \
+        Rscript {R_FRAG}/scripts/make_healthy_gc_summary.R \
           "{input.csvs}" "{output.rds}"
         """
 rule frag_gc_sample:
@@ -322,6 +350,8 @@ rule frag_gc_sample:
         cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_gc_sample.log",
     benchmark:
         f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_gc_sample.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -331,7 +361,7 @@ rule frag_gc_sample:
         exec &>> "{log.cmd}"
         echo "[gc_sample] $(date) lib={wildcards.library_id} ref={wildcards.ref_name}"
 
-        Rscript scripts/sample_frags_by_gc.R \
+        Rscript {R_FRAG}/scripts/sample_frags_by_gc.R \
           "{input.healthy_med}" "{input.frag_bed}" "{output.bed}"
         """
 rule frag_window_sum:
@@ -345,6 +375,8 @@ rule frag_window_sum:
         cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_window_sum.log",
     benchmark:
         f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_window_sum.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -355,7 +387,7 @@ rule frag_window_sum:
         exec &>> "{log.cmd}"
         echo "[window_sum] $(date) lib={wildcards.library_id} ref={wildcards.ref_name}"
 
-        bash scripts/frag_window_sum.sh \
+        bash {R_FRAG}/scripts/frag_window_sum.sh \
           "{input.bed}" "{output.short}" "{output.long}"
         """
 rule frag_window_count:
@@ -371,6 +403,8 @@ rule frag_window_count:
         cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_window_count.log",
     benchmark:
         f"{D_BENCHMARK}/{{library_id}}_{{ref_name}}_frag_window_count.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -381,9 +415,9 @@ rule frag_window_count:
         exec &>> "{log.cmd}"
         echo "[window_count] $(date) lib={wildcards.library_id} ref={wildcards.ref_name}"
 
-        bash scripts/frag_window_int.sh \
+        bash {R_FRAG}/scripts/frag_window_int.sh \
           "{input.short}" "{input.matbed}" "{output.short}"
-        bash scripts/frag_window_int.sh \
+        bash {R_FRAG}/scripts/frag_window_int.sh \
           "{input.long}" "{input.matbed}" "{output.long}"
         """
 rule frag_count_merge:
@@ -402,6 +436,8 @@ rule frag_count_merge:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_count_merge.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_count_merge.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -413,7 +449,7 @@ rule frag_count_merge:
         exec &>> "{log.cmd}"
         echo "[count_merge] $(date) ref={wildcards.ref_name}"
 
-        bash scripts/count_merge.sh \
+        bash {R_FRAG}/scripts/count_merge.sh \
           "{params.counts_dir}" "{output.tsv}"
         """
 rule frag_ratio_normalize:
@@ -427,6 +463,8 @@ rule frag_ratio_normalize:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_ratio_normalize.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_ratio_normalize.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -436,7 +474,7 @@ rule frag_ratio_normalize:
         exec &>> "{log.cmd}"
         echo "[ratios] $(date) ref={wildcards.ref_name}"
 
-        Rscript scripts/make_ratios.R \
+        Rscript {R_FRAG}/scripts/make_ratios.R \
           "{input.tsv}" "{output.tsv}"
         """
 rule frag_end_motifs:
@@ -454,6 +492,8 @@ rule frag_end_motifs:
     params:
         max_ends = FRAG_END_MOTIF_MAX_ENDS,
         seed     = FRAG_END_MOTIF_SEED,
+    resources:
+        concurrency = 25,
     threads:
         4
     output:
@@ -463,7 +503,7 @@ rule frag_end_motifs:
         exec &>> "{log.cmd}"
         echo "[end_motifs] $(date) lib={wildcards.library_id} ref={wildcards.ref_name} max_ends={params.max_ends}"
 
-        bash scripts/frag_end_motifs.sh \
+        bash {R_FRAG}/scripts/frag_end_motifs.sh \
           "{input.bam}" "{input.fasta}" "{output.tsv}" \
           {threads} {params.max_ends} {params.seed}
         """
@@ -482,6 +522,8 @@ rule frag_motif_matrix:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_motif_matrix.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_motif_matrix.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     wildcard_constraints:
@@ -495,7 +537,7 @@ rule frag_motif_matrix:
         exec &>> "{log.cmd}"
         echo "[motif_matrix] $(date) ref={wildcards.ref_name}"
 
-        python3 scripts/frag_motif_matrix.py \
+        python3 {R_FRAG}/scripts/frag_motif_matrix.py \
           "{output.counts}" "{output.tsv}" {input.counts}
         """
 rule frag_length_hist:
@@ -512,6 +554,8 @@ rule frag_length_hist:
     params:
         start_bp = FRAG_LENGTH_HIST_START,
         end_bp   = FRAG_LENGTH_HIST_END,
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -522,7 +566,7 @@ rule frag_length_hist:
         echo "[length_hist] $(date) lib={wildcards.library_id} ref={wildcards.ref_name}"
 
         mkdir -p "$(dirname {output.tsv})"
-        Rscript scripts/frag_length_hist.R \
+        Rscript {R_FRAG}/scripts/frag_length_hist.R \
           "{input.bed}" "{output.tsv}" {params.start_bp} {params.end_bp}
         """
 rule frag_length_freq_matrix:
@@ -540,6 +584,8 @@ rule frag_length_freq_matrix:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_length_freq_matrix.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_length_freq_matrix.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -551,7 +597,7 @@ rule frag_length_freq_matrix:
         echo "[freq_matrix] $(date) ref={wildcards.ref_name}"
 
         mkdir -p "$(dirname {output.counts})"
-        Rscript scripts/frag_length_freq_matrix.R \
+        Rscript {R_FRAG}/scripts/frag_length_freq_matrix.R \
           "{input.hists}" "{output.counts}" "{output.freqs}"
         """
 rule frag_arm_zscores:
@@ -568,6 +614,8 @@ rule frag_arm_zscores:
         f"{D_BENCHMARK}/{{ref_name}}_frag_arm_zscores.tsv"
     params:
         healthy_libs = " ".join(FRAG_HEALTHY_LIBRARIES),
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -582,7 +630,7 @@ rule frag_arm_zscores:
         healthy_file=$(mktemp)
         for lib in {params.healthy_libs}; do echo "$lib" >> "$healthy_file"; done
 
-        Rscript scripts/delfi_arm_zscores.R \
+        Rscript {R_FRAG}/scripts/delfi_arm_zscores.R \
           "{input.counts}" "{input.cytoband}" "$healthy_file" "{output.csv}"
 
         rm -f "$healthy_file"
@@ -598,6 +646,8 @@ rule frag_ratio_row_normalize:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_ratio_row_normalize.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_ratio_row_normalize.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -608,7 +658,7 @@ rule frag_ratio_row_normalize:
         echo "[ratio_row_norm] $(date) ref={wildcards.ref_name}"
 
         mkdir -p "$(dirname {output.csv})"
-        Rscript scripts/ratio_row_normalize.R \
+        Rscript {R_FRAG}/scripts/ratio_row_normalize.R \
           "{input.tsv}" "{output.csv}"
         """
 rule frag_plot_length_overlay:
@@ -622,6 +672,8 @@ rule frag_plot_length_overlay:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_plot_length_overlay.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_plot_length_overlay.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -632,7 +684,7 @@ rule frag_plot_length_overlay:
         echo "[plot_length_overlay] $(date) ref={wildcards.ref_name}"
 
         mkdir -p "$(dirname {output.pdf})"
-        Rscript scripts/plot_frag_length_overlay.R \
+        Rscript {R_FRAG}/scripts/plot_frag_length_overlay.R \
           "{input.freq}" "{output.pdf}"
         """
 rule frag_plot_ratio_profile:
@@ -646,6 +698,8 @@ rule frag_plot_ratio_profile:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_plot_ratio_profile.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_plot_ratio_profile.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -656,7 +710,7 @@ rule frag_plot_ratio_profile:
         echo "[plot_ratio_profile] $(date) ref={wildcards.ref_name}"
 
         mkdir -p "$(dirname {output.pdf})"
-        Rscript scripts/plot_ratio_profile.R \
+        Rscript {R_FRAG}/scripts/plot_ratio_profile.R \
           "{input.tsv}" "{output.pdf}"
         """
 rule frag_plot_arm_zscore_heatmap:
@@ -670,6 +724,8 @@ rule frag_plot_arm_zscore_heatmap:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_plot_arm_zscore_heatmap.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_plot_arm_zscore_heatmap.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -680,7 +736,7 @@ rule frag_plot_arm_zscore_heatmap:
         echo "[plot_arm_zscore_heatmap] $(date) ref={wildcards.ref_name}"
 
         mkdir -p "$(dirname {output.pdf})"
-        Rscript scripts/plot_arm_zscore_heatmap.R \
+        Rscript {R_FRAG}/scripts/plot_arm_zscore_heatmap.R \
           "{input.csv}" "{output.pdf}"
         """
 rule frag_nmf_length_features:
@@ -694,6 +750,8 @@ rule frag_nmf_length_features:
         cmd = f"{D_LOGS}/{{ref_name}}_nmf_{{n_components}}_frag_nmf_length_features.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_nmf_{{n_components}}_frag_nmf_length_features.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -705,7 +763,7 @@ rule frag_nmf_length_features:
         echo "[nmf_length] $(date) ref={wildcards.ref_name} k={wildcards.n_components}"
 
         mkdir -p "$(dirname {output.w})"
-        python3 scripts/frag_nmf_length_features.py \
+        python3 {R_FRAG}/scripts/frag_nmf_length_features.py \
           "{input.freq}" {wildcards.n_components} "{output.w}" "{output.h}"
         """
 rule frag_motif_diversity:
@@ -719,6 +777,8 @@ rule frag_motif_diversity:
         cmd = f"{D_LOGS}/{{ref_name}}_frag_motif_diversity.log",
     benchmark:
         f"{D_BENCHMARK}/{{ref_name}}_frag_motif_diversity.tsv"
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -729,7 +789,7 @@ rule frag_motif_diversity:
         echo "[motif_diversity] $(date) ref={wildcards.ref_name}"
 
         mkdir -p "$(dirname {output.csv})"
-        Rscript scripts/frag_motif_diversity.R \
+        Rscript {R_FRAG}/scripts/frag_motif_diversity.R \
           "{input.tsv}" "{output.csv}"
         """
 rule frag_fprofiles:
@@ -745,6 +805,8 @@ rule frag_fprofiles:
         f"{D_BENCHMARK}/{{ref_name}}_frag_fprofiles.tsv"
     params:
         n_components = FRAG_FPROFILES_K,
+    resources:
+        concurrency = 10,
     threads:
         1
     output:
@@ -756,6 +818,6 @@ rule frag_fprofiles:
         echo "[fprofiles] $(date) ref={wildcards.ref_name} k={params.n_components}"
 
         mkdir -p "$(dirname {output.fprof})"
-        python3 scripts/frag_fprofiles.py \
+        python3 {R_FRAG}/scripts/frag_fprofiles.py \
           "{input.tsv}" {params.n_components} "{output.fprof}" "{output.motif_per_fprof}"
         """
