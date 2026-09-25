@@ -9,11 +9,12 @@ dependencies:
   - fastqc=0.12.1
   - jsonschema=4.26.0
   - pandas=2.3.3
+  - pybigwig=0.3.26
   - pytest=9.0.2
   - r-data.table=1.18.6.1
   - r-tidyverse=2.0.0
   - samtools=1.24
   - scikit-learn=1.9.1
   - scipy=1.18.1
-  - snakemake=9.14.5
+  - snakemake=9.21.0
   - sra-tools=3.4.1

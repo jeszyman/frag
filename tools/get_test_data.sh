@@ -19,7 +19,6 @@ parse_args() {
     declare -g fa_head_lines=4000000
     declare -g nreads=60000
 
-    declare -g keep_bed="${out_dir}/chr22.keep.bed"
     declare -g out_blk="${out_dir}/hg38-blacklist.v2.bed.gz"
     declare -g out_fa="${out_dir}/chr22-test.fa.gz"
     declare -g excl_bed="${out_dir}/chr22.exclude.blacklist.bed.gz"
@@ -105,7 +104,7 @@ fetch_blacklist() {
 make_exclude_keep_beds() {
   mkdir -p "$out_dir"
 
-  echo "[beds] building keep/exclude from ${out_fa}"
+  echo "[beds] building exclude from ${out_fa}"
 
   fa_ungz="${out_dir}/chr22.test.fa"
   zcat "$out_fa" > "$fa_ungz"
@@ -113,11 +112,6 @@ make_exclude_keep_beds() {
 
   samtools faidx "$fa_ungz"
   test -s "${fa_ungz}.fai"
-
-  # KEEP: spans for all contigs present in the .fai (chr22-only here)
-  awk 'BEGIN{OFS="\t"} {print $1,0,$2}' "${fa_ungz}.fai" \
-    | sort -k1,1 -k2,2n > "$keep_bed"
-  test -s "$keep_bed"
 
   # EXCLUDE: clip blacklist to contigs present in .fai and bgzip
   awk 'NR==FNR{ok[$1]=1; next} ok[$1]' <(cut -f1 "${fa_ungz}.fai") <(zcat "$out_blk") \
@@ -128,7 +122,7 @@ make_exclude_keep_beds() {
 
   rm -f "$fa_ungz" "${fa_ungz}.fai"
 
-  echo "[beds] keep=${keep_bed}  exclude=${excl_bed}"
+  echo "[beds] exclude=${excl_bed}"
 }
 
 main "$@"

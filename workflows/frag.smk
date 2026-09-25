@@ -16,7 +16,7 @@
 #   FRAG_REF_INPUTS          dict ref_name -> path of the reference FASTA (.fa.gz)
 #   frag_ref_names           list of reference names (the keys of FRAG_REF_INPUTS)
 #   FRAG_FASTP_EXTRA         extra fastp arguments (string, may be empty)
-#   FRAG_GC5MB               BED of GC/mappability-restricted regions
+#   FRAG_DELFI_BINS          DELFI 5 Mb bin table (chr start end arm gc map blacklisted_bases)
 #   FRAG_BLKLIST             blacklist BED (.bed or .bed.gz)
 #   FRAG_CYTOBAND            UCSC cytoBand table for chromosome arms
 #   FRAG_END_MOTIF_MAX_ENDS  end-motif cap per library (0 = every end)
@@ -139,7 +139,7 @@ rule frag_check_ids:
         CONDA_FRAG
     input:
         fasta    = f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa",
-        regions  = FRAG_GC5MB,
+        regions  = FRAG_DELFI_BINS,
         blklist  = FRAG_BLKLIST,
         cytoband = FRAG_CYTOBAND,
         bams     = expand(
@@ -235,31 +235,30 @@ rule frag_bam_to_frag_bed:
         bash scripts/bam_to_frag_bed.sh \
           "{input.bam}" "{input.fasta}" "{output.bed}"
         """
-rule frag_gc_map_bins:
+rule frag_delfi_bins:
     message:
-        "Create GC and mappability restricted 5Mb bins"
+        "DELFI 5 Mb bins on the reference contigs"
     conda:
         CONDA_FRAG
     input:
-        regions = FRAG_GC5MB,
-        blklist = FRAG_BLKLIST,
-        fasta   = expand(f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa", ref_name=frag_ref_names)[0],
-        ids_ok  = expand(f"{D_FRAG}/ref/{{ref_name}}.ids_verified.ok", ref_name=frag_ref_names)[0],
+        bins   = FRAG_DELFI_BINS,
+        fai    = f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa.fai",
+        ids_ok = f"{D_FRAG}/ref/{{ref_name}}.ids_verified.ok",
     log:
-        cmd = f"{D_LOGS}/frag_gc_map_bins.log",
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_delfi_bins.log",
     benchmark:
-        f"{D_BENCHMARK}/frag_gc_map_bins.tsv"
+        f"{D_BENCHMARK}/{{ref_name}}_frag_delfi_bins.tsv"
     threads:
         1
     output:
-        keep = f"{D_FRAG}/ref/keep_5mb.bed",
+        bed = f"{D_FRAG}/ref/{{ref_name}}.delfi_bins.bed",
     shell:
         """
         exec &>> "{log.cmd}"
-        echo "[gc_map_bins] $(date)"
+        echo "[delfi_bins] $(date) ref={wildcards.ref_name}"
 
-        bash scripts/make_gc_map_bins.sh \
-          "{input.regions}" "{input.fasta}" "{input.blklist}" "{output.keep}"
+        bash scripts/frag_delfi_bins.sh \
+          "{input.bins}" "{input.fai}" "{output.bed}"
         """
 rule frag_gc_distro:
     message:
@@ -367,7 +366,7 @@ rule frag_window_count:
     input:
         short  = f"{D_FRAG}/frags/{{library_id}}.{{ref_name}}.norm_short.bed",
         long   = f"{D_FRAG}/frags/{{library_id}}.{{ref_name}}.norm_long.bed",
-        matbed = f"{D_FRAG}/ref/keep_5mb.bed",
+        matbed = f"{D_FRAG}/ref/{{ref_name}}.delfi_bins.bed",
     log:
         cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_window_count.log",
     benchmark:

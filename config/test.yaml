@@ -15,7 +15,7 @@ frag_ref_assemblies:
     name: chr22
     input: chr22-test.fa.gz
 
-gc5mb: tests/full/inputs/chr22.keep.bed
+delfi_bins: tests/full/inputs/delfi_bins.chr22.tsv
 blklist: tests/full/inputs/hg38-blacklist.v2.bed.gz
 cytoband: tests/full/inputs/cytoBand.chr22.txt
 

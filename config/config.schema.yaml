@@ -1,7 +1,7 @@
 $schema: "https://json-schema.org/draft/2020-12/schema"
 title: frag wrapper configuration (workflows/test.smk, workflows/cfdna-test.smk)
 type: object
-required: [conda, directories, sample-tsv-path, frag_ref_assemblies, gc5mb, blklist, cytoband]
+required: [conda, directories, sample-tsv-path, frag_ref_assemblies, delfi_bins, blklist, cytoband]
 properties:
   conda:
     type: object
@@ -34,7 +34,7 @@ properties:
         url: {type: string, description: source of the FASTA (documentation only)}
         name: {type: string}
         input: {type: string, description: "reference FASTA (.fa.gz) under directories.inputs"}
-  gc5mb: {type: string, description: BED of GC/mappability-restricted regions}
+  delfi_bins: {type: string, description: "DELFI 5 Mb bin table (TSV with header chr start end arm gc map blacklisted_bases), built by tools/make_delfi_bins.py"}
   blklist: {type: string, description: blacklist BED (.bed or .bed.gz)}
   cytoband: {type: string, description: UCSC cytoBand table for chromosome arms}
   healthy_libraries:

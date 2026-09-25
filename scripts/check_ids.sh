@@ -13,7 +13,7 @@ set -euo pipefail
 # Zero overlap is a hard halt.
 #
 # Usage:
-#   check_ids.sh <ref.fa> <regions.bed> <blacklist.bed.gz> <cytoband.txt> \
+#   check_ids.sh <ref.fa> <delfi_bins.tsv> <blacklist.bed.gz> <cytoband.txt> \
 #                <sentinel.ok> <bam1> [bam2 ...]
 
 ref="$1"; regions="$2"; blklist="$3"; cyto="$4"; sentinel="$5"
@@ -36,7 +36,7 @@ check() {
   echo "[check_ids] OK: $label ($overlap chroms match reference)" >&2
 }
 
-check "regions"   "$(cut -f1 "$regions")"
+check "delfi bins" "$(tail -n +2 "$regions" | cut -f1)"
 check "blacklist" "$(zcat -f "$blklist" | cut -f1)"
 check "cytoband"  "$(cut -f1 "$cyto")"
 

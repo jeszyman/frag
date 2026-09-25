@@ -266,13 +266,14 @@ dependencies:
   - fastqc=0.12.1
   - jsonschema=4.26.0
   - pandas=2.3.3
+  - pybigwig=0.3.26
   - pytest=9.0.2
   - r-data.table=1.18.6.1
   - r-tidyverse=2.0.0
   - samtools=1.24
   - scikit-learn=1.9.1
   - scipy=1.18.1
-  - snakemake=9.14.5
+  - snakemake=9.21.0
   - sra-tools=3.4.1
 #+end_src
 
@@ -284,7 +285,7 @@ A run is configured by one YAML file, checked at startup against =config/config.
 $schema: "https://json-schema.org/draft/2020-12/schema"
 title: frag wrapper configuration (workflows/test.smk, workflows/cfdna-test.smk)
 type: object
-required: [conda, directories, sample-tsv-path, frag_ref_assemblies, gc5mb, blklist, cytoband]
+required: [conda, directories, sample-tsv-path, frag_ref_assemblies, delfi_bins, blklist, cytoband]
 properties:
   conda:
     type: object
@@ -317,7 +318,7 @@ properties:
         url: {type: string, description: source of the FASTA (documentation only)}
         name: {type: string}
         input: {type: string, description: "reference FASTA (.fa.gz) under directories.inputs"}
-  gc5mb: {type: string, description: BED of GC/mappability-restricted regions}
+  delfi_bins: {type: string, description: "DELFI 5 Mb bin table (TSV with header chr start end arm gc map blacklisted_bases), built by tools/make_delfi_bins.py"}
   blklist: {type: string, description: blacklist BED (.bed or .bed.gz)}
   cytoband: {type: string, description: UCSC cytoBand table for chromosome arms}
   healthy_libraries:
@@ -376,7 +377,7 @@ frag_ref_assemblies:
     name: ncbi_hg38
     input: GCA_000001405.15_GRCh38_no_alt_analysis_set.fa.gz
 
-gc5mb: /path/to/hg38_regions.bed
+delfi_bins: resources/data/delfi_bins_hg38.tsv
 blklist: /path/to/hg38-blacklist.v2.bed.gz
 cytoband: /path/to/cytoBand.txt
 
@@ -440,7 +441,7 @@ include: "workflows/test.smk"
 #   FRAG_REF_INPUTS          dict ref_name -> path of the reference FASTA (.fa.gz)
 #   frag_ref_names           list of reference names (the keys of FRAG_REF_INPUTS)
 #   FRAG_FASTP_EXTRA         extra fastp arguments (string, may be empty)
-#   FRAG_GC5MB               BED of GC/mappability-restricted regions
+#   FRAG_DELFI_BINS          DELFI 5 Mb bin table (chr start end arm gc map blacklisted_bases)
 #   FRAG_BLKLIST             blacklist BED (.bed or .bed.gz)
 #   FRAG_CYTOBAND            UCSC cytoBand table for chromosome arms
 #   FRAG_END_MOTIF_MAX_ENDS  end-motif cap per library (0 = every end)
@@ -625,7 +626,7 @@ rule frag_check_ids:
         CONDA_FRAG
     input:
         fasta    = f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa",
-        regions  = FRAG_GC5MB,
+        regions  = FRAG_DELFI_BINS,
         blklist  = FRAG_BLKLIST,
         cytoband = FRAG_CYTOBAND,
         bams     = expand(
@@ -665,7 +666,7 @@ set -euo pipefail
 # Zero overlap is a hard halt.
 #
 # Usage:
-#   check_ids.sh <ref.fa> <regions.bed> <blacklist.bed.gz> <cytoband.txt> \
+#   check_ids.sh <ref.fa> <delfi_bins.tsv> <blacklist.bed.gz> <cytoband.txt> \
 #                <sentinel.ok> <bam1> [bam2 ...]
 
 ref="$1"; regions="$2"; blklist="$3"; cyto="$4"; sentinel="$5"
@@ -688,7 +689,7 @@ check() {
   echo "[check_ids] OK: $label ($overlap chroms match reference)" >&2
 }
 
-check "regions"   "$(cut -f1 "$regions")"
+check "delfi bins" "$(tail -n +2 "$regions" | cut -f1)"
 check "blacklist" "$(zcat -f "$blklist" | cut -f1)"
 check "cytoband"  "$(cut -f1 "$cyto")"
 
@@ -954,95 +955,71 @@ echo "[bam_to_frag_bed] OK: $lines fragments in $output_frag_bed" >&2
 #+end_src
 
 *** Fragment length
-**** GC and mappability restricted bins
+**** DELFI bins
+The fragment counts use the DELFI 5 Mb bins of the reference (=FRAG_DELFI_BINS=, built once per genome under Reference preparation). This rule keeps the bins whose chromosome is in the reference index and that end within it, and writes =chr=, =start=, =end= and =gc=, the columns the window count, count merge, ratio and arm z-score steps read.
 
 #+begin_src snakemake
-rule frag_gc_map_bins:
+rule frag_delfi_bins:
     message:
-        "Create GC and mappability restricted 5Mb bins"
+        "DELFI 5 Mb bins on the reference contigs"
     conda:
         CONDA_FRAG
     input:
-        regions = FRAG_GC5MB,
-        blklist = FRAG_BLKLIST,
-        fasta   = expand(f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa", ref_name=frag_ref_names)[0],
-        ids_ok  = expand(f"{D_FRAG}/ref/{{ref_name}}.ids_verified.ok", ref_name=frag_ref_names)[0],
+        bins   = FRAG_DELFI_BINS,
+        fai    = f"{D_FRAG}/ref/bwa/{{ref_name}}/{{ref_name}}.fa.fai",
+        ids_ok = f"{D_FRAG}/ref/{{ref_name}}.ids_verified.ok",
     log:
-        cmd = f"{D_LOGS}/frag_gc_map_bins.log",
+        cmd = f"{D_LOGS}/{{ref_name}}_frag_delfi_bins.log",
     benchmark:
-        f"{D_BENCHMARK}/frag_gc_map_bins.tsv"
+        f"{D_BENCHMARK}/{{ref_name}}_frag_delfi_bins.tsv"
     threads:
         1
     output:
-        keep = f"{D_FRAG}/ref/keep_5mb.bed",
+        bed = f"{D_FRAG}/ref/{{ref_name}}.delfi_bins.bed",
     shell:
         """
         exec &>> "{log.cmd}"
-        echo "[gc_map_bins] $(date)"
+        echo "[delfi_bins] $(date) ref={wildcards.ref_name}"
 
-        bash scripts/make_gc_map_bins.sh \
-          "{input.regions}" "{input.fasta}" "{input.blklist}" "{output.keep}"
+        bash scripts/frag_delfi_bins.sh \
+          "{input.bins}" "{input.fai}" "{output.bed}"
         """
 #+end_src
 
-#+begin_src bash :tangle ./scripts/make_gc_map_bins.sh
+#+begin_src bash :tangle ./scripts/frag_delfi_bins.sh
 #!/usr/bin/env bash
 set -euo pipefail
 
-# make_gc_map_bins.sh
-# Create 5Mb genomic windows, compute GC content, filter by blacklist and GC.
-# Usage: make_gc_map_bins.sh <regions.bed> <ref.fa> <blacklist.bed.gz> <output_keep.bed>
+# frag_delfi_bins.sh
+# DELFI bins on one reference: the rows of the bin table (header
+# chr start end arm gc map blacklisted_bases, 0-based half-open) whose
+# chromosome is in the reference index and whose end lies within it, written
+# as a BED of chr, start, end, gc.
+# Usage: frag_delfi_bins.sh <delfi_bins.tsv> <ref.fa.fai> <out.bed>
 
-regions="$1"
-fasta="$2"
-blklist="$3"
-keep="$4"
+bins="$1"
+fai="$2"
+out_bed="$3"
 
-tmpdir=$(mktemp -d)
-trap 'rm -rf "$tmpdir"' EXIT
-
-# Ensure FASTA is indexed
-samtools faidx "$fasta" 2>/dev/null || true
-
-# Precondition: regions BED and FASTA must share at least one chromosome name.
-# bedtools nuc silently skips windows whose chrom is not in the FASTA, producing
-# an empty keep.bed with only "Feature beyond the length of X size (0 bp)" warnings.
-regions_chroms=$(cut -f1 "$regions" | sort -u)
-fai_chroms=$(cut -f1 "${fasta}.fai" | sort -u)
-if [[ -z "$(comm -12 <(echo "$regions_chroms") <(echo "$fai_chroms"))" ]]; then
-  echo "ERROR: make_gc_map_bins: $regions and ${fasta}.fai share zero chromosome names" >&2
-  echo "  regions sample: $(echo "$regions_chroms" | head -3 | tr '\n' ' ')" >&2
-  echo "  FASTA sample:   $(echo "$fai_chroms"     | head -3 | tr '\n' ' ')" >&2
-  echo "  Likely cause: 'chr' prefix mismatch. Strip or add prefix on one side to match." >&2
+header=$(head -n 1 "$bins")
+if [[ "$header" != $'chr\tstart\tend\tarm\tgc\tmap\tblacklisted_bases' ]]; then
+  echo "ERROR: frag_delfi_bins: $bins header is '$header', expected chr start end arm gc map blacklisted_bases" >&2
   exit 1
 fi
 
-awk 'BEGIN{OFS="\t"} {print $1,$2}' "${fasta}.fai" > "$tmpdir/genome.txt"
+awk -F'\t' 'BEGIN {OFS="\t"}
+  NR == FNR {len[$1] = $2; next}
+  FNR > 1 && ($1 in len) && $3 <= len[$1] {print $1, $2, $3, $5}' "$fai" "$bins" \
+  | sort -k1,1 -k2,2n > "$out_bed"
 
-# Window into 5Mb bins
-bedtools makewindows -b "$regions" -w 5000000 > "$tmpdir/windows.bed"
-
-# Compute GC content per window (column 5 = %GC in bedtools nuc output)
-bedtools nuc -fi "$fasta" -bed "$tmpdir/windows.bed" \
-  | tail -n +2 \
-  | awk 'BEGIN{OFS="\t"} {print $1,$2,$3,$5}' > "$tmpdir/gc_windows.bed"
-
-# Remove blacklist-overlapping bins, alt contigs, and low-GC bins
-bedtools intersect -a "$tmpdir/gc_windows.bed" -b "$blklist" -v -wa \
-  | grep -v '_' \
-  | awk '{ if ($4 >= 0.3) print $0 }' > "$keep"
-
-# Postcondition: keep.bed must be non-empty.
-lines=$(wc -l < "$keep")
-if [[ "$lines" -eq 0 ]]; then
-  echo "ERROR: make_gc_map_bins produced empty $keep" >&2
-  echo "  Possible causes:" >&2
-  echo "    - blacklist removed all bins (verify $blklist chrom naming matches $regions)" >&2
-  echo "    - all bins had GC < 0.3" >&2
-  echo "    - bedtools nuc silently dropped windows (identifier mismatch against FASTA)" >&2
+# Postcondition: at least one bin lies on the reference.
+n=$(wc -l < "$out_bed")
+if [[ "$n" -eq 0 ]]; then
+  echo "ERROR: frag_delfi_bins: no bin of $bins lies on a contig of $fai" >&2
+  echo "  Likely cause: 'chr' prefix mismatch or a bin table for another genome." >&2
   exit 1
 fi
-echo "[make_gc_map_bins] OK: $lines bins kept in $keep" >&2
+echo "[frag_delfi_bins] OK: $n of $(( $(wc -l < "$bins") - 1 )) bins on the reference in $out_bed" >&2
 #+end_src
 
 **** GC distribution
@@ -1403,7 +1380,7 @@ rule frag_window_count:
     input:
         short  = f"{D_FRAG}/frags/{{library_id}}.{{ref_name}}.norm_short.bed",
         long   = f"{D_FRAG}/frags/{{library_id}}.{{ref_name}}.norm_long.bed",
-        matbed = f"{D_FRAG}/ref/keep_5mb.bed",
+        matbed = f"{D_FRAG}/ref/{{ref_name}}.delfi_bins.bed",
     log:
         cmd = f"{D_LOGS}/{{library_id}}_{{ref_name}}_frag_window_count.log",
     benchmark:
@@ -3124,6 +3101,215 @@ def assert_cols(df, cols, label="object"):
     return df
 #+end_src
 
+** Reference preparation
+Reference files that are built once per genome by hand, not by a rule. Their outputs are committed under =resources/data/= and named in the config.
+
+*** DELFI 5 Mb bins
+The DELFI short/long ratios and arm z-scores count fragments in 5 Mb bins. Mathios et al. (2021) tiled hg19 into non-overlapping 5 Mb bins and excluded bins with an average GC content below 0.3 or an average mappability below 0.9, which left 473 bins spanning about 2.4 Gb. Their table also records the blacklisted bases inside each kept bin (=filtered.bases=); the bin itself is kept. =tools/make_delfi_bins.py= applies the same rule directly to hg38, without liftover. It tiles chr1 to chr22 into 5 Mb bins from position 0 and drops the last, partial bin of each chromosome, as the Mathios table has only full bins. For each bin it computes the GC fraction over non-N bases (=bedtools nuc=), the mean Umap k100 multi-read mappability over all bases of the bin with unmapped bases counted as 0 (=pyBigWig=), the blacklisted bases (=bedtools intersect= with the merged blacklist) and the arm (=p= when the bin midpoint lies before the end of the last =p= band of the cytoband table). Reads in blacklisted bases are already removed by the read regions, so the bins need no further masking.
+
+The Mathios files in =resources/data/= (=mathios2021_gc_mappability.txv=, their Supplementary Data 12, and its BED form) are kept as the reference the hg38 bins are compared against; no rule reads them.
+
+Provenance of =resources/data/delfi_bins_hg38.tsv= (built on jeff-beast in =/mnt/data/projects/cfdna/frag/ref_v2/= on [2026-09-24 Thu]):
+
+| Input                 | Source                                                                                                                                                             | md5                              |
+|-----------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------+----------------------------------|
+| Reference FASTA index | =ncbi_hg38.fa.fai=, GRCh38 no-alt analysis set (UCSC names), as in =config/common.yaml=                                                                                | 5fddbc109c82980f9436aa5c21a57c61 |
+| Blacklist             | ENCODE hg38 blacklist v2 (Boyle Lab), identical to =resources/data/hg38-blacklist.v2.bed= (decompressed)                                                             | 766848c2a632d1b9dd12fac98ce02bd3 |
+| Mappability           | Umap k100 multi-read mappability, https://hgdownload.soe.ucsc.edu/gbdb/hg38/hoffmanMappability/k100.Umap.MultiTrackMappability.bw, downloaded 2026-09-24T23:40:28Z | 59646493c85a8f991603d8af8701bdc4 |
+| Cytoband              | UCSC hg38 =cytoBand.txt=                                                                                                                                             | 1b87bbfe572064c2a40d79683ea7a6ad |
+| Output                | =resources/data/delfi_bins_hg38.tsv=                                                                                                                                 | 01e250e08e868ab29da858c8ea2cda17 |
+
+#+begin_example
+python tools/make_delfi_bins.py --fasta ncbi_hg38.fa --blacklist hg38-blacklist.v2.bed.gz \
+  --mappability k100.Umap.MultiTrackMappability.bw --cytoband cytoBand.txt \
+  --out delfi_bins_hg38.tsv
+#+end_example
+
+Of 565 full 5 Mb bins on chr1 to chr22, 487 pass both filters and span 2.435 Gb, against 473 bins and 2.365 Gb in the Mathios hg19 table. 184 kept bins contain blacklisted bases (8.37 Mb in all). Kept bins have GC 0.344 to 0.556 and mean mappability 0.900 to 0.997. The per-chromosome counts agree with Mathios to within three bins:
+
+| Chromosome | hg38 (this table) | hg19 (Mathios 2021) |
+|------------+-------------------+---------------------|
+| chr1       |                42 |                  41 |
+| chr2       |                43 |                  42 |
+| chr3       |                38 |                  37 |
+| chr4       |                36 |                  35 |
+| chr5       |                34 |                  32 |
+| chr6       |                32 |                  31 |
+| chr7       |                27 |                  27 |
+| chr8       |                26 |                  25 |
+| chr9       |                20 |                  19 |
+| chr10      |                23 |                  22 |
+| chr11      |                26 |                  23 |
+| chr12      |                25 |                  23 |
+| chr13      |                18 |                  19 |
+| chr14      |                17 |                  17 |
+| chr15      |                13 |                  13 |
+| chr16      |                11 |                  12 |
+| chr17      |                12 |                  13 |
+| chr18      |                14 |                  13 |
+| chr19      |                 9 |                   8 |
+| chr20      |                11 |                  10 |
+| chr21      |                 5 |                   6 |
+| chr22      |                 5 |                   5 |
+| total      |               487 |                 473 |
+
+The fixture bin table =tests/full/inputs/delfi_bins.chr22.tsv= is the header and the five chr22 rows of this table, so the test run needs no bigWig.
+
+#+begin_src python :tangle ./tools/make_delfi_bins.py
+#!/usr/bin/env python3
+"""make_delfi_bins.py: DELFI 5 Mb bins on an hg38 reference.
+
+Applies the bin rule of Mathios et al. 2021 to hg38: chr1-chr22 are tiled
+into non-overlapping bins from position 0 (the last, partial bin of each
+chromosome is dropped); each bin gets its GC fraction over non-N bases, its
+mean mappability over all bases (bases with no bigWig value count as 0), its
+blacklisted bases and its chromosome arm; bins with GC < min-gc or
+mappability < min-map are dropped.
+
+Output TSV with a header, 0-based half-open coordinates:
+    chr start end arm gc map blacklisted_bases
+
+Usage:
+    make_delfi_bins.py --fasta hg38.fa --blacklist hg38-blacklist.v2.bed.gz \
+        --mappability k100.Umap.MultiTrackMappability.bw \
+        --cytoband cytoBand.txt --out delfi_bins_hg38.tsv
+"""
+import argparse
+import gzip
+import io
+import re
+import subprocess
+import sys
+import tempfile
+
+import pandas as pd
+import pyBigWig
+
+# =============================================================================
+# ARGUMENTS
+# =============================================================================
+
+
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("--fasta", required=True, help="reference FASTA with a .fai index")
+    p.add_argument("--blacklist", required=True, help="blacklist BED (.bed or .bed.gz)")
+    p.add_argument("--mappability", required=True, help="mappability bigWig")
+    p.add_argument("--cytoband", required=True, help="UCSC cytoBand table")
+    p.add_argument("--out", required=True, help="output TSV")
+    p.add_argument("--bin-size", type=int, default=5_000_000)
+    p.add_argument("--min-gc", type=float, default=0.3)
+    p.add_argument("--min-map", type=float, default=0.9)
+    return p.parse_args(argv)
+
+
+# =============================================================================
+# WORK FUNCTIONS
+# =============================================================================
+
+
+def tile_autosomes(fai, bin_size):
+    """Full-size bins over every chr1-chr22 contig of the index, from position 0."""
+    rows = []
+    with open(fai) as fh:
+        for line in fh:
+            chrom, length = line.split("\t")[:2]
+            if re.fullmatch(r"chr[0-9]+", chrom):
+                for i in range(int(length) // bin_size):
+                    rows.append((chrom, i * bin_size, (i + 1) * bin_size))
+    if not rows:
+        sys.exit(f"[FAIL] no chr1-chr22 contig of at least one bin in {fai}")
+    return pd.DataFrame(rows, columns=["chr", "start", "end"])
+
+
+def gc_non_n(fasta, bins, bed_path):
+    """GC fraction over A, C, G, T bases of each bin (bedtools nuc counts).
+
+    A bin with no A, C, G or T base (all N) gets NaN and fails the GC filter.
+    """
+    out = subprocess.run(
+        ["bedtools", "nuc", "-fi", fasta, "-bed", bed_path],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    nuc = pd.read_csv(io.StringIO(out), sep="\t")
+    a, c, g, t = (nuc.iloc[:, i] for i in (5, 6, 7, 8))
+    return ((c + g) / (a + c + g + t)).to_numpy()
+
+
+def mean_mappability(bigwig, bins):
+    """Mean bigWig value over all bases of each bin; bases without a value count as 0."""
+    bw = pyBigWig.open(bigwig)
+    values = []
+    for chrom, start, end in bins[["chr", "start", "end"]].itertuples(index=False):
+        mean = bw.stats(chrom, start, end, type="mean", exact=True)[0]
+        covered = bw.stats(chrom, start, end, type="coverage", exact=True)[0]
+        values.append(0.0 if mean is None else mean * covered)
+    bw.close()
+    return values
+
+
+def blacklisted_bases(blacklist, bed_path, tmpdir):
+    """Bases of each bin covered by the merged blacklist."""
+    opener = gzip.open if blacklist.endswith(".gz") else open
+    with opener(blacklist, "rt") as fh:
+        blk = pd.read_csv(fh, sep="\t", header=None, usecols=[0, 1, 2])
+    blk_path = f"{tmpdir}/blacklist.bed"
+    blk.sort_values([0, 1]).to_csv(blk_path, sep="\t", header=False, index=False)
+    merged = subprocess.run(
+        ["bedtools", "merge", "-i", blk_path], check=True, capture_output=True, text=True
+    ).stdout
+    merged_path = f"{tmpdir}/blacklist.merged.bed"
+    with open(merged_path, "w") as fh:
+        fh.write(merged)
+    out = subprocess.run(
+        ["bedtools", "intersect", "-a", bed_path, "-b", merged_path, "-wao"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    hits = pd.read_csv(io.StringIO(out), sep="\t", header=None)
+    return hits.groupby([0, 1, 2], sort=False)[hits.columns[-1]].sum().to_numpy()
+
+
+def arms(cytoband, bins):
+    """p when the bin midpoint lies before the end of the chromosome's last p band."""
+    cyto = pd.read_csv(cytoband, sep="\t", header=None, usecols=[0, 1, 2, 3])
+    cyto.columns = ["chr", "start", "end", "band"]
+    p_end = cyto[cyto["band"].astype(str).str.startswith("p")].groupby("chr")["end"].max()
+    mid = (bins["start"] + bins["end"]) / 2
+    arm = [
+        chrom[3:] + ("p" if m < p_end.get(chrom, 0) else "q")
+        for chrom, m in zip(bins["chr"], mid)
+    ]
+    return arm
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    bins = tile_autosomes(args.fasta + ".fai", args.bin_size)
+    print(f"[make_delfi_bins] {len(bins)} full bins on chr1-chr22", file=sys.stderr)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        bed_path = f"{tmpdir}/bins.bed"
+        bins.to_csv(bed_path, sep="\t", header=False, index=False)
+        bins["arm"] = arms(args.cytoband, bins)
+        bins["gc"] = gc_non_n(args.fasta, bins, bed_path)
+        bins["map"] = mean_mappability(args.mappability, bins)
+        bins["blacklisted_bases"] = blacklisted_bases(args.blacklist, bed_path, tmpdir)
+    keep = bins[(bins["gc"] >= args.min_gc) & (bins["map"] >= args.min_map)]
+    keep.to_csv(args.out, sep="\t", index=False, float_format="%.6f")
+    print(
+        f"[make_delfi_bins] kept {len(keep)} of {len(bins)} bins "
+        f"({len(keep) * args.bin_size / 1e9:.3f} Gb) in {args.out}",
+        file=sys.stderr,
+    )
+
+
+if __name__ == "__main__":
+    main()
+#+end_src
+
 ** Testing
 *** Test data provenance
 Test data is paired-end WGS (whole-genome sequencing) of cell-free DNA, not EM-seq or bisulfite-seq. Samples are from [[https://www.ncbi.nlm.nih.gov/bioproject/PRJNA326698][PRJNA326698]] (Snyder et al. 2016, /Cell/), downloaded from NCBI SRA.
@@ -3143,7 +3329,7 @@ Test data is paired-end WGS (whole-genome sequencing) of cell-free DNA, not EM-s
 *** Get test data
 - Get 60k reads per sample from SRA
 - Get small hg38 reference by taking top of chr22
-- Get broad blacklist regions and apply to our reference as bed files
+- Get broad blacklist regions and apply to our reference as a bed file
 - Ensure gitignore does not push tests/full, but does retain tests/full/inputs/*
 
 #+begin_src bash :tangle ./tools/get_test_data.sh
@@ -3169,7 +3355,6 @@ parse_args() {
     declare -g fa_head_lines=4000000
     declare -g nreads=60000
 
-    declare -g keep_bed="${out_dir}/chr22.keep.bed"
     declare -g out_blk="${out_dir}/hg38-blacklist.v2.bed.gz"
     declare -g out_fa="${out_dir}/chr22-test.fa.gz"
     declare -g excl_bed="${out_dir}/chr22.exclude.blacklist.bed.gz"
@@ -3255,7 +3440,7 @@ fetch_blacklist() {
 make_exclude_keep_beds() {
   mkdir -p "$out_dir"
 
-  echo "[beds] building keep/exclude from ${out_fa}"
+  echo "[beds] building exclude from ${out_fa}"
 
   fa_ungz="${out_dir}/chr22.test.fa"
   zcat "$out_fa" > "$fa_ungz"
@@ -3263,11 +3448,6 @@ make_exclude_keep_beds() {
 
   samtools faidx "$fa_ungz"
   test -s "${fa_ungz}.fai"
-
-  # KEEP: spans for all contigs present in the .fai (chr22-only here)
-  awk 'BEGIN{OFS="\t"} {print $1,0,$2}' "${fa_ungz}.fai" \
-    | sort -k1,1 -k2,2n > "$keep_bed"
-  test -s "$keep_bed"
 
   # EXCLUDE: clip blacklist to contigs present in .fai and bgzip
   awk 'NR==FNR{ok[$1]=1; next} ok[$1]' <(cut -f1 "${fa_ungz}.fai") <(zcat "$out_blk") \
@@ -3278,7 +3458,7 @@ make_exclude_keep_beds() {
 
   rm -f "$fa_ungz" "${fa_ungz}.fai"
 
-  echo "[beds] keep=${keep_bed}  exclude=${excl_bed}"
+  echo "[beds] exclude=${excl_bed}"
 }
 
 main "$@"
@@ -3305,7 +3485,7 @@ frag_ref_assemblies:
     name: chr22
     input: chr22-test.fa.gz
 
-gc5mb: tests/full/inputs/chr22.keep.bed
+delfi_bins: tests/full/inputs/delfi_bins.chr22.tsv
 blklist: tests/full/inputs/hg38-blacklist.v2.bed.gz
 cytoband: tests/full/inputs/cytoBand.chr22.txt
 
@@ -3398,7 +3578,7 @@ NMF_N_COMPONENTS = config.get("nmf", {}).get("n_components", 2)
 # Module inputs (workflows/frag.smk reads no config; see its preamble).
 FRAG_FASTP_EXTRA        = config.get("fastp", {}).get("extra", "")
 FRAG_REF_INPUTS         = {name: f"{D_INPUTS}/{a['input']}" for name, a in config["frag_ref_assemblies"].items()}
-FRAG_GC5MB              = config["gc5mb"]
+FRAG_DELFI_BINS         = config["delfi_bins"]
 FRAG_BLKLIST            = config["blklist"]
 FRAG_CYTOBAND           = config["cytoband"]
 FRAG_END_MOTIF_MAX_ENDS = config.get("end_motif", {}).get("max_ends") or 0   # null in YAML -> 0 = every end
@@ -3465,8 +3645,11 @@ rule all:
             library_id=FRAG_LIBRARY_IDS,
             ref_name=frag_ref_names,
         ),
-        # GC-filtered bins
-        f"{D_FRAG}/ref/keep_5mb.bed",
+        # DELFI bins on the reference
+        expand(
+            f"{D_FRAG}/ref/{{ref_name}}.delfi_bins.bed",
+            ref_name=frag_ref_names,
+        ),
         # Read regions (autosomes minus blacklisted bases)
         expand(
             f"{D_FRAG}/ref/{{ref_name}}.read_regions.bed",
@@ -3958,6 +4141,50 @@ def test_no_shared_chromosome_fails(tmp_path):
     assert "share no chromosome" in res.stderr
 #+end_src
 
+The DELFI-bins test gives =scripts/frag_delfi_bins.sh= a bin table with three =chr1= bins and one =chr2= bin and an index holding only a 12 Mb =chr1=. The output is the two =chr1= bins that end within the contig, as =chr=, =start=, =end=, =gc=.
+
+#+begin_src python :tangle ./tests/unit/test_delfi_bins.py :mkdirp yes
+"""Known-answer test for scripts/frag_delfi_bins.sh."""
+import subprocess
+from pathlib import Path
+
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "frag_delfi_bins.sh"
+HEADER = "chr\tstart\tend\tarm\tgc\tmap\tblacklisted_bases\n"
+
+
+def run(tmp_path, table):
+    bins = tmp_path / "bins.tsv"
+    bins.write_text(table)
+    fai = tmp_path / "ref.fa.fai"
+    fai.write_text("chr1\t12000000\t6\t60\t61\n")
+    out = tmp_path / "bins.bed"
+    res = subprocess.run(
+        ["bash", str(SCRIPT), str(bins), str(fai), str(out)],
+        capture_output=True,
+        text=True,
+    )
+    return res, out
+
+
+def test_bins_on_reference_contigs(tmp_path):
+    res, out = run(
+        tmp_path,
+        HEADER
+        + "chr1\t0\t5000000\t1p\t0.41\t0.95\t0\n"
+        + "chr1\t5000000\t10000000\t1p\t0.42\t0.96\t12\n"
+        + "chr1\t10000000\t15000000\t1q\t0.43\t0.97\t0\n"
+        + "chr2\t0\t5000000\t2p\t0.44\t0.98\t0\n",
+    )
+    assert res.returncode == 0, res.stderr
+    assert out.read_text() == "chr1\t0\t5000000\t0.41\nchr1\t5000000\t10000000\t0.42\n"
+
+
+def test_wrong_header_fails(tmp_path):
+    res, _ = run(tmp_path, "chr\tstart\tend\tgc\nchr1\t0\t5000000\t0.41\n")
+    assert res.returncode != 0
+    assert "expected chr start end arm gc map blacklisted_bases" in res.stderr
+#+end_src
+
 *** Pinned outputs
 The fixture run's deterministic outputs are pinned by md5 in =tests/expected_outputs.md5= and compared by =tools/check_expected_outputs.sh tests/full=, which prints =ok= or =DIFF= per file and exits 1 on any difference; =--write= regenerates the pins. A =.gz= file is summed on its decompressed bytes. Only files that were byte-identical across two clean fixture runs are pinned (32 files): the per-bin counts, fragment BEDs and GC distributions, ratios, length histograms, end-motif counts and matrices, the derived features, and =ref/keep_5mb.bed=. Left out: the filtered BAMs (their headers differ between runs), the three QC PDFs and the two fastp HTML reports (both differed between runs), the fastp JSON and processed FASTQs (their content depends on fastp's threading and the paths it records), the aligned BAMs and the BWA index (large binaries downstream steps already cover), and =healthy_med.rds= (R serialization format depends on the R version).
 
@@ -4067,7 +4294,7 @@ frag_ref_assemblies:
     name: ncbi_hg38
     input: GCA_000001405.15_GRCh38_no_alt_analysis_set.fa.gz
 
-gc5mb: /mnt/data/projects/cfdna/frag/hg38_regions.bed
+delfi_bins: ${HOME}/repos/frag/resources/data/delfi_bins_hg38.tsv
 blklist: /mnt/data/projects/cfdna/frag/hg38-blacklist.v2.bed.gz
 cytoband: /mnt/data/projects/cfdna/frag/cytoBand.txt
 
@@ -4152,7 +4379,7 @@ NMF_N_COMPONENTS = config.get("nmf", {}).get("n_components", 2)
 # Module inputs (workflows/frag.smk reads no config; see its preamble).
 FRAG_FASTP_EXTRA        = config.get("fastp", {}).get("extra", "")
 FRAG_REF_INPUTS         = {name: f"{D_INPUTS}/{a['input']}" for name, a in config["frag_ref_assemblies"].items()}
-FRAG_GC5MB              = config["gc5mb"]
+FRAG_DELFI_BINS         = config["delfi_bins"]
 FRAG_BLKLIST            = config["blklist"]
 FRAG_CYTOBAND           = config["cytoband"]
 FRAG_END_MOTIF_MAX_ENDS = config.get("end_motif", {}).get("max_ends") or 0   # null in YAML -> 0 = every end
@@ -4219,8 +4446,11 @@ rule all:
             library_id=FRAG_LIBRARY_IDS,
             ref_name=frag_ref_names,
         ),
-        # GC-filtered bins
-        f"{D_FRAG}/ref/keep_5mb.bed",
+        # DELFI bins on the reference
+        expand(
+            f"{D_FRAG}/ref/{{ref_name}}.delfi_bins.bed",
+            ref_name=frag_ref_names,
+        ),
         # Read regions (autosomes minus blacklisted bases)
         expand(
             f"{D_FRAG}/ref/{{ref_name}}.read_regions.bed",

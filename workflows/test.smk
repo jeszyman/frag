@@ -69,7 +69,7 @@ NMF_N_COMPONENTS = config.get("nmf", {}).get("n_components", 2)
 # Module inputs (workflows/frag.smk reads no config; see its preamble).
 FRAG_FASTP_EXTRA        = config.get("fastp", {}).get("extra", "")
 FRAG_REF_INPUTS         = {name: f"{D_INPUTS}/{a['input']}" for name, a in config["frag_ref_assemblies"].items()}
-FRAG_GC5MB              = config["gc5mb"]
+FRAG_DELFI_BINS         = config["delfi_bins"]
 FRAG_BLKLIST            = config["blklist"]
 FRAG_CYTOBAND           = config["cytoband"]
 FRAG_END_MOTIF_MAX_ENDS = config.get("end_motif", {}).get("max_ends") or 0   # null in YAML -> 0 = every end
@@ -136,8 +136,11 @@ rule all:
             library_id=FRAG_LIBRARY_IDS,
             ref_name=frag_ref_names,
         ),
-        # GC-filtered bins
-        f"{D_FRAG}/ref/keep_5mb.bed",
+        # DELFI bins on the reference
+        expand(
+            f"{D_FRAG}/ref/{{ref_name}}.delfi_bins.bed",
+            ref_name=frag_ref_names,
+        ),
         # Read regions (autosomes minus blacklisted bases)
         expand(
             f"{D_FRAG}/ref/{{ref_name}}.read_regions.bed",

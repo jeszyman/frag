@@ -15,7 +15,7 @@ frag_ref_assemblies:
     name: ncbi_hg38
     input: GCA_000001405.15_GRCh38_no_alt_analysis_set.fa.gz
 
-gc5mb: /mnt/data/projects/cfdna/frag/hg38_regions.bed
+delfi_bins: ${HOME}/repos/frag/resources/data/delfi_bins_hg38.tsv
 blklist: /mnt/data/projects/cfdna/frag/hg38-blacklist.v2.bed.gz
 cytoband: /mnt/data/projects/cfdna/frag/cytoBand.txt
 
