@@ -68,22 +68,22 @@ Fragmentomics pipeline for cell-free DNA whole-genome sequencing analysis. Extra
 
 *** Key files
 
-| Path                                        | Holds                                                                                             |
-|---------------------------------------------+---------------------------------------------------------------------------------------------------|
-| [[file:frag.org][=frag.org=]]                                    | literate source; tangles every file below                                                         |
-| [[file:workflows/frag.smk][=workflows/frag.smk=]]                          | the module: rules only, reads no config; its preamble lists the variables a wrapper binds         |
-| [[file:workflows/test.smk][=workflows/test.smk=]]                          | example wrapper and the CI target; binds every module variable                                    |
-| [[file:Snakefile][=Snakefile=]]                                   | entry point that includes the example wrapper, so =snakemake -n= works from the root                |
-| [[file:config/common.yaml][=config/common.yaml=]]                          | configuration template for a project                                                              |
+| Path                                            | Holds                                                                                             |
+|-------------------------------------------------+---------------------------------------------------------------------------------------------------|
+| [[file:frag.org][=frag.org=]]                                      | literate source; tangles every file below                                                         |
+| [[file:workflows/frag.smk][=workflows/frag.smk=]]                            | the module: rules only, reads no config; its preamble lists the variables a wrapper binds         |
+| [[file:workflows/test.smk][=workflows/test.smk=]]                            | example wrapper and the CI target; binds every module variable                                    |
+| [[file:Snakefile][=Snakefile=]]                                     | entry point that includes the example wrapper, so =snakemake -n= works from the root                |
+| [[file:config/common.yaml][=config/common.yaml=]]                            | configuration template for a project                                                              |
 | [[file:config/test.yaml][=config/test.yaml=]], [[file:config/samples_test.tsv][=config/samples_test.tsv=]]   | fixture configuration and sample sheet                                                            |
-| [[file:config/config.schema.yaml][=config/config.schema.yaml=]]                   | JSON schema of every config key; the wrapper checks the config against it and lists every problem |
-| [[file:envs/frag-conda-env.yaml][=envs/frag-conda-env.yaml=]]                    | the one pinned conda environment (Snakemake and every tool)                                       |
-| [[file:scripts][=scripts/=]]                                    | per-step R, Python and shell scripts called by the rules                                          |
-| [[file:resources/data/delfi_bins_hg38.tsv][=resources/data/delfi_bins_hg38.tsv=]]          | DELFI 5 Mb bins on hg38, built by [[file:tools/make_delfi_bins.py][=tools/make_delfi_bins.py=]]                                        |
-| [[file:tools][=tools/=]]                                      | fixture fetch, pinned-output check, DELFI bin builder, end-motif summary, org update              |
-| [[file:tests/unit][=tests/unit/=]]                                 | known-answer and contract tests (pytest)                                                          |
+| [[file:config/config.schema.yaml][=config/config.schema.yaml=]]                     | JSON schema of every config key; the wrapper checks the config against it and lists every problem |
+| [[file:envs/frag-conda-env.yaml][=envs/frag-conda-env.yaml=]]                      | the one pinned conda environment (Snakemake and every tool)                                       |
+| [[file:scripts][=scripts/=]]                                      | per-step R, Python and shell scripts called by the rules                                          |
+| [[file:resources/data/delfi_bins_hg38.tsv][=resources/data/delfi_bins_hg38.tsv=]]            | DELFI 5 Mb bins on hg38, built by [[file:tools/make_delfi_bins.py][=tools/make_delfi_bins.py=]]                                      |
+| [[file:tools][=tools/=]]                                        | fixture fetch, pinned-output check, DELFI bin builder, end-motif summary, org update              |
+| [[file:tests/unit][=tests/unit/=]]                                   | known-answer and contract tests (pytest)                                                          |
 | [[file:tests/expected_outputs.md5][=tests/expected_outputs.md5=]], [[file:tests/expected][=tests/expected/=]] | pinned fixture outputs                                                                            |
-| [[file:resources/figures/frag.dag.png][=resources/figures/frag.dag.png=]]              | rule graph                                                                                        |
+| [[file:resources/figures/frag.dag.png][=resources/figures/frag.dag.png=]]                | rule graph                                                                                        |
 | [[file:LICENSE][=LICENSE=]], [[file:CITATION.cff][=CITATION.cff=]]                       | MIT license; citation metadata                                                                    |
 
 *** Including from your wrapper
