@@ -184,7 +184,7 @@ REPOS=(
 REPO_DIR="${HOME}/repos/frag"
 README_ORG="${REPO_DIR}/frag.org"
 README_NODE="339b69f6-6c09-4e9d-a2ec-27bdf5747163"
-README_EXPORT="${HOME}/repos/emacs/scripts/emacs_export_header_to_markdown.py"
+README_EXPORT="${HOME}/repos/html/scripts/emacs_export_header_to_markdown.py"
 
 # =============================================================================
 # SECTION: USAGE AND INPUT PARSING

@@ -1,1 +1,1 @@
-/home/jeszyman/repos/science/resources/inline_html.py
+/home/jeszyman/repos/html/scripts/inline_html.py
